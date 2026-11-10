@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#14202E">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>My Bus Connections</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Barlow+Condensed:wght@500;600;700&display=swap">
+<style>
+/* Layout: one column of route cards, sorted by arrival; ETAs on dark "arrival board" plates. */
+:root {
+  --bg: #EEF1F5; --card: #FFFFFF; --ink: #14202E; --muted: #5A6777; --line: #D6DCE4;
+  --plate: #111820; --led: #FFB020; --accent: #1F5FA8;
+  --ok: #1B7F4E; --ok-bg: #E2F3EA; --warn: #A86200; --warn-bg: #FCEFD9; --bad: #B8332A; --bad-bg: #FBE4E2;
+  --f-display: "Barlow Condensed", "Arial Narrow", system-ui, sans-serif;
+  --f-body: "Atkinson Hyperlegible", system-ui, -apple-system, "Segoe UI", sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0D131A; --card: #16202A; --ink: #E5EAF0; --muted: #94A1B0; --line: #26323F;
+    --plate: #05080B; --led: #FFB830; --accent: #6FA8EC;
+    --ok: #5CCB8F; --ok-bg: #12301F; --warn: #F0B04A; --warn-bg: #33260F; --bad: #F07A70; --bad-bg: #3A1A18;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0D131A; --card: #16202A; --ink: #E5EAF0; --muted: #94A1B0; --line: #26323F;
+  --plate: #05080B; --led: #FFB830; --accent: #6FA8EC;
+  --ok: #5CCB8F; --ok-bg: #12301F; --warn: #F0B04A; --warn-bg: #33260F; --bad: #F07A70; --bad-bg: #3A1A18;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--ink); font: 15px/1.45 var(--f-body);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  -webkit-text-size-adjust: 100%;
+}
+.wrap { max-width: 640px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+header { position: sticky; top: 0; z-index: 5; background: var(--plate); color: #F3F5F7; padding-top: env(safe-area-inset-top, 0px); }
+header .wrap { padding-block: 10px 0; }
+.top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+h1 { font: 700 22px/1 var(--f-display); letter-spacing: .02em; margin: 0; text-transform: uppercase; }
+h1 span { color: var(--led); }
+.status { font-size: 12px; color: #A9B4C0; text-align: right; font-variant-numeric: tabular-nums; }
+.status button { font: inherit; color: var(--led); background: none; border: 1px solid #3A4654; border-radius: 6px; padding: 3px 8px; margin-left: 6px; cursor: pointer; }
+nav { display: flex; gap: 2px; margin-top: 10px; overflow-x: auto; scrollbar-width: none; }
+nav button {
+  flex: 1 0 auto; font: 600 17px/1 var(--f-display); letter-spacing: .04em; text-transform: uppercase;
+  color: #A9B4C0; background: none; border: 0; border-bottom: 3px solid transparent; padding: 10px 12px 9px; cursor: pointer;
+}
+nav button[aria-selected="true"] { color: #fff; border-bottom-color: var(--led); }
+nav button:focus-visible, button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--led); outline-offset: 2px; }
+main .wrap { padding-block: 14px 40px; display: flex; flex-direction: column; gap: 12px; }
+.from { font-size: 13px; color: var(--muted); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.card.best { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.rname { font: 600 19px/1.1 var(--f-display); letter-spacing: .02em; }
+.rname small { display: block; font: 400 12px/1.3 var(--f-body); color: var(--muted); margin-top: 3px; letter-spacing: 0; }
+.plate { background: var(--plate); color: var(--led); border-radius: 8px; padding: 6px 10px; text-align: right; min-width: 86px; font-variant-numeric: tabular-nums; }
+.plate b { display: block; font: 700 26px/1 var(--f-display); letter-spacing: .03em; }
+.plate span { font-size: 11px; color: #C9D1DA; }
+.summary { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.pill { font-size: 12.5px; font-weight: 700; padding: 3px 9px; border-radius: 99px; background: var(--bg); color: var(--ink); white-space: nowrap; }
+.pill.ok { background: var(--ok-bg); color: var(--ok); }
+.pill.warn { background: var(--warn-bg); color: var(--warn); }
+.pill.bad { background: var(--bad-bg); color: var(--bad); }
+ol.steps { list-style: none; margin: 0; padding: 0 0 0 14px; border-left: 2px solid var(--line); display: flex; flex-direction: column; gap: 7px; }
+ol.steps li { position: relative; font-size: 14px; min-width: 0; }
+ol.steps li::before { content: ""; position: absolute; left: -20px; top: 6px; width: 10px; height: 10px; border-radius: 50%; background: var(--card); border: 2px solid var(--muted); }
+ol.steps li.bus::before { border-color: var(--accent); background: var(--accent); }
+ol.steps li.xfer.ok::before { border-color: var(--ok); background: var(--ok); }
+ol.steps li.xfer.warn::before { border-color: var(--warn); background: var(--warn); }
+ol.steps li.xfer.bad::before { border-color: var(--bad); background: var(--bad); }
+.svc { display: inline-block; font: 700 14px/1 var(--f-display); background: var(--accent); color: var(--card); padding: 3px 6px 2px; border-radius: 4px; letter-spacing: .03em; }
+.t { font-variant-numeric: tabular-nums; font-weight: 700; }
+.meta { color: var(--muted); font-size: 12.5px; }
+.tag { font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: 1px 5px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); }
+.tag.gps { color: var(--ok); border-color: currentColor; }
+.tag.sched { color: var(--warn); border-color: currentColor; }
+details { border-top: 1px solid var(--line); padding-top: 8px; }
+summary { cursor: pointer; font-size: 13px; color: var(--accent); font-weight: 700; }
+table.later { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+table.later td { padding: 5px 4px; border-bottom: 1px solid var(--line); }
+table.later td:last-child { text-align: right; }
+.empty { color: var(--muted); font-size: 14px; }
+.legend { font-size: 12.5px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; padding: 4px 2px; }
+.err { background: var(--bad-bg); color: var(--bad); border-radius: 10px; padding: 10px 12px; font-size: 13.5px; }
+/* Times editor */
+.edit h2 { font: 600 20px/1.1 var(--f-display); text-transform: uppercase; letter-spacing: .03em; margin: 6px 0 0; }
+.edit h3 { font: 600 16px/1.2 var(--f-display); margin: 4px 0 0; letter-spacing: .02em; }
+.row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.row label { font-size: 14px; min-width: 0; }
+.row label .meta { display: block; }
+.row input { width: 64px; font: 700 16px var(--f-body); padding: 6px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); text-align: right; }
+.row input.changed { border-color: var(--accent); }
+.guess { color: var(--warn); font-weight: 700; }
+.btn { font: 700 14px var(--f-body); padding: 9px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); cursor: pointer; }
+@media (prefers-reduced-motion: no-preference) { .card { transition: border-color .2s; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div class="top">
+      <h1>My Bus <span>Connections</span></h1>
+      <div class="status"><span id="updated">Loading…</span><button id="refresh" type="button">Refresh</button></div>
+    </div>
+    <nav id="tabs" role="tablist"></nav>
+  </div>
+</header>
+<main><div class="wrap" id="view"></div></main>
+
+<script>
+"use strict";
+/* ============================================================
+   ROUTES — edit here. All times are minutes.
+   Bus ride times are estimates from route distance; the app
+   replaces them with live GPS-matched arrival when it can.
+   Values with guess:true are placeholders to check in Google Maps.
+   ============================================================ */
+const STOP = {
+  "75151": "Opp Blk 871A", "75159": "Blk 874", "75171": "UWCSEA", "75179": "Blk 871C",
+  "75419": "The Alps Residences", "75251": "Opp Tropica Condo", "75259": "Tropica Condo",
+  "52179": "Braddell Stn", "84481": "Aft Bedok Ind Pk C", "09219": "Far East Plaza",
+  "09047": "Orchard Stn/Tang Plaza", "72179": "HomeTeamNS", "84201": "Bedok Resvr Stn Exit A",
+  "75089": "Blk 827", "75009": "Tampines Int", "96289": "Changi General Hosp", "96169": "Simei Stn",
+  "75051": "Tampines West Stn Exit B", "76081": "Opp Holy Trinity Ch", "76059": "Opp Our Tampines Hub",
+  "76171": "Blk 266", "76141": "Tampines Stn/Int"
+};
+const walk = (id, min, label, guess) => ({ t: "walk", id, min, label, guess: !!guess });
+const train = (id, min, label, guess) => ({ t: "train", id, min, label, guess: !!guess });
+const bus = (svc, from, to, ride) => ({ t: "bus", svc: [].concat(svc), from, to, ride });
+const home = (stop, min) => walk("home-" + stop, min, "Walk from home to " + STOP[stop]);
+
+const TABS = [
+  { id: "orchard", name: "Orchard", from: "From home", routes: [
+    { name: "298 → 129 → MRT", note: "Ends at Orchard MRT", variants: [[
+      home("75179", 3), bus("298", "75179", "75251", { 298: 4 }),
+      walk("x-75251-75259", 2, "Cross to Tropica Condo (75259)"),
+      bus("129", "75259", "52179", { 129: 32 }),
+      walk("braddell-platform", 3, "Walk into Braddell MRT", true),
+      train("nsl-braddell-orchard", 11, "NSL Braddell → Orchard, incl. wait", true)
+    ]] },
+    { name: "298 → 58 → 5", note: "Ends at Orchard MRT (walk from Far East Plaza)", variants: [[
+      home("75179", 3), bus("298", "75179", "75419", { 298: 1 }),
+      bus("58", "75419", "84481", { 58: 9 }), bus("5", "84481", "09219", { 5: 41 }),
+      walk("fep-orchard", 4, "Walk Far East Plaza → Orchard MRT")
+    ], [
+      home("75419", 5),
+      bus("58", "75419", "84481", { 58: 9 }), bus("5", "84481", "09219", { 5: 41 }),
+      walk("fep-orchard", 4, "Walk Far East Plaza → Orchard MRT")
+    ]] },
+    { name: "298 → 518", note: "Ends at Orchard Stn/Tang Plaza", variants: [[
+      home("75179", 3), bus("298", "75179", "75251", { 298: 4 }),
+      walk("x-75251-75259", 2, "Cross to Tropica Condo (75259)"),
+      bus("518", "75259", "09047", { 518: 43 })
+    ]] },
+    { name: "298 → 58 → 518", note: "Ends at Orchard Stn/Tang Plaza", variants: [[
+      home("75179", 3), bus("298", "75179", "75419", { 298: 1 }),
+      bus("58", "75419", "72179", { 58: 7 }), bus("518", "72179", "09047", { 518: 39 })
+    ], [
+      home("75419", 5),
+      bus("58", "75419", "72179", { 58: 7 }), bus("518", "72179", "09047", { 518: 39 })
+    ]] }
+  ]},
+  { id: "home", name: "Home", from: "From Bedok Reservoir MRT, now", routes: [
+    { name: "69", note: "From Exit A", variants: [[
+      walk("bdr-exitA", 1, "Walk to stop at Exit A (84201)"),
+      bus("69", "84201", "75151", { 69: 11 }), walk("home-from-75151", 3, "Walk home")
+    ]] },
+    { name: "46 → 293 / 298", note: "Change at Blk 827", variants: [[
+      walk("bdr-exitA", 1, "Walk to stop at Exit A (84201)"),
+      bus("46", "84201", "75089", { 46: 8 }),
+      bus(["293", "298"], "75089", "75151", { 293: 3, 298: 3 }), walk("home-from-75151", 3, "Walk home")
+    ]] },
+    { name: "DTL → 293", note: "Stay on train to Tampines", variants: [[
+      train("dtl-bdr-tampines", 4, "DTL Bedok Reservoir → Tampines", true),
+      walk("tampines-dtl-int", 5, "Walk to Tampines Int bus bay", true),
+      bus("293", "75009", "75151", { 293: 9 }), walk("home-from-75151", 3, "Walk home")
+    ]] },
+    { name: "DTL → 69", note: "Stay on train to Tampines", variants: [[
+      train("dtl-bdr-tampines", 4, "DTL Bedok Reservoir → Tampines", true),
+      walk("tampines-dtl-int", 5, "Walk to Tampines Int bus bay", true),
+      bus("69", "75009", "75159", { 69: 6 }), walk("home-from-75159", 3, "Walk home")
+    ]] }
+  ]},
+  { id: "ccss", name: "CCSS", from: "From home", routes: [
+    { name: "69 → EWL to Simei", note: "Bus to Tampines Int, 1 stop on EWL", variants: [[
+      home("75151", 3), bus("69", "75151", "75009", { 69: 6 }),
+      walk("tampines-int-ewl", 4, "Walk to Tampines MRT (EWL)", true),
+      train("ewl-tampines-simei", 6, "EWL Tampines → Simei, incl. wait", true),
+      walk("simei-ccss", 8, "Walk Simei → CCSS", true)
+    ]] },
+    { name: "118 → 5", note: "Change at Changi General Hosp", variants: [[
+      home("75159", 3), bus("118", "75159", "96289", { 118: 11 }),
+      bus("5", "96289", "96169", { 5: 3 }),
+      walk("simei-ccss", 8, "Walk Simei → CCSS", true)
+    ]] }
+  ]},
+  { id: "ymps", name: "YMPS", from: "From home", routes: [
+    { name: "454 → 8/18/28/59", note: "Change at Tampines West", variants: [[
+      home("75179", 3), bus("454", "75179", "75051", { 454: 9 }),
+      bus(["8", "18", "28", "59"], "75051", "76081", { 8: 4, 18: 4, 28: 4, 59: 4 }),
+      walk("76081-ymps", 3, "Walk to YMPS", true)
+    ]] },
+    { name: "298 → 8", note: "Change at Opp Tropica Condo", variants: [[
+      home("75179", 3), bus("298", "75179", "75251", { 298: 4 }),
+      bus("8", "75251", "76081", { 8: 10 }),
+      walk("76081-ymps", 3, "Walk to YMPS", true)
+    ]] },
+    { name: "34", note: "Direct", variants: [[
+      home("75171", 3), bus("34", "75171", "76081", { 34: 10 }),
+      walk("76081-ymps", 3, "Walk to YMPS", true)
+    ]] },
+    { name: "34A → 20/292/39", note: "Change at Our Tampines Hub", variants: [[
+      home("75171", 3), bus("34A", "75171", "76059", { "34A": 5 }),
+      bus(["20", "292", "39"], "76059", "76081", { 20: 5, 292: 7, 39: 5 }),
+      walk("76081-ymps", 3, "Walk to YMPS", true)
+    ]] },
+    { name: "34A → 3", note: "Change at Our Tampines Hub", variants: [[
+      home("75171", 3), bus("34A", "75171", "76059", { "34A": 5 }),
+      bus("3", "76059", "76171", { 3: 6 }),
+      walk("76171-ymps", 3, "Walk to YMPS", true)
+    ]] },
+    { name: "454 → 3", note: "Change at Tampines Int", variants: [[
+      home("75179", 3), bus("454", "75179", "76141", { 454: 13 }),
+      bus("3", "76141", "76171", { 3: 4 }),
+      walk("76171-ymps", 3, "Walk to YMPS", true)
+    ]] }
+  ]}
+];
+
+/* Connection thresholds (minutes of spare time at a transfer) */
+const SAFE = 3, TIGHT = 1;
+
+/* ============================ Storage ============================ */
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
+};
+let overrides = store.get("bus.overrides", {});
+const rideKey = (svc, l) => `ride:${svc}:${l.from}:${l.to}`;
+const fixedMin = l => (l.id in overrides ? overrides[l.id] : l.min);
+const rideMin = (svc, l) => { const k = rideKey(svc, l); return k in overrides ? overrides[k] : l.ride[svc]; };
+
+/* ============================ Live data ============================ */
+const cache = {};   // stop -> { json, at, err }
+async function fetchStop(stop) {
+  try {
+    const r = await fetch("https://arrivelah2.busrouter.sg/?id=" + stop, { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    cache[stop] = { json: await r.json(), at: Date.now() };
+  } catch (e) {
+    cache[stop] = Object.assign(cache[stop] || {}, { err: String(e.message || e) });
+  }
+}
+function stopsFor(tab) {
+  const s = new Set();
+  tab.routes.forEach(r => r.variants.forEach(v => v.forEach(l => { if (l.t === "bus") { s.add(l.from); s.add(l.to); } })));
+  return [...s];
+}
+/* Upcoming buses of one service at one stop, minutes from now */
+function arrivals(stop, svc) {
+  const c = cache[stop]; if (!c || !c.json) return [];
+  const s = (c.json.services || []).find(x => x.no === svc); if (!s) return [];
+  const now = Date.now(), seen = new Set(), out = [];
+  for (const k of ["next", "subsequent", "next2", "next3"]) {
+    const b = s[k]; if (!b || !b.time) continue;
+    if (seen.has(b.time)) continue; seen.add(b.time);
+    const eta = (Date.parse(b.time) - now) / 60000;
+    if (eta < -0.5) continue;
+    const gps = !!(b.lat && b.lng) && b.monitored !== 0;
+    out.push({ svc, eta, lat: b.lat, lng: b.lng, gps, load: b.load });
+  }
+  return out.sort((a, b) => a.eta - b.eta);
+}
+function metres(a, b) {
+  const p = Math.PI / 180, dLat = (b.lat - a.lat) * p, dLng = (b.lng - a.lng) * p;
+  const x = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * p) * Math.cos(b.lat * p) * Math.sin(dLng / 2) ** 2;
+  return 12742000 * Math.asin(Math.sqrt(x));
+}
+/* When does this exact bus reach the alighting stop? Match by GPS position. */
+function alightAt(leg, b) {
+  if (b.gps) {
+    const m = arrivals(leg.to, b.svc).find(c => c.gps && metres(c, b) < 80);
+    if (m && m.eta >= b.eta) return { at: m.eta, live: true };
+  }
+  return { at: b.eta + rideMin(b.svc, leg), live: false };
+}
+function busesAt(leg) {
+  return leg.svc.flatMap(s => arrivals(leg.from, s)).sort((a, b) => a.eta - b.eta);
+}
+const grade = slack => slack >= SAFE ? "ok" : slack >= TIGHT ? "warn" : "bad";
+
+/* ============================ Planner ============================ */
+/* For one variant: one journey per catchable first bus. */
+function planVariant(legs) {
+  const fi = legs.findIndex(l => l.t === "bus");
+  const pre = legs.slice(0, fi).reduce((s, l) => s + fixedMin(l), 0);
+  const first = legs[fi];
+  const starts = busesAt(first).filter(b => b.eta - pre >= -0.25).slice(0, 4);
+  return starts.map(b0 => {
+    const leave = Math.max(0, b0.eta - pre);
+    const steps = []; let t = leave;
+    for (let i = 0; i < fi; i++) { steps.push({ leg: legs[i], start: t }); t += fixedMin(legs[i]); }
+    let worst = "ok", estimated = false, incomplete = false, b = b0;
+    for (let i = fi; i < legs.length; i++) {
+      const l = legs[i];
+      if (l.t !== "bus") { steps.push({ leg: l, start: t }); t += fixedMin(l); continue; }
+      let slack = null, backup = null;
+      if (i > fi) {
+        const opts = busesAt(l).filter(x => x.eta >= t);
+        if (!opts.length) { steps.push({ leg: l, start: t, missing: true, est: estimated }); incomplete = true; break; }
+        b = opts[0]; backup = opts[1] || null; slack = b.eta - t;
+        const g = grade(slack); if (g === "bad" || (g === "warn" && worst === "ok")) worst = g;
+      }
+      const a = alightAt(l, b);
+      steps.push({ leg: l, bus: b, slack, backup, arrive: a.at, liveArrive: a.live, est: estimated });
+      if (!a.live) estimated = true;
+      t = a.at;
+    }
+    return { leave, arrive: incomplete ? null : t, steps, worst, estimated, incomplete };
+  });
+}
+function planRoute(r) {
+  const js = r.variants.flatMap(planVariant);
+  js.sort((a, b) => (a.arrive ?? 1e9) - (b.arrive ?? 1e9) || b.leave - a.leave);
+  // drop journeys that arrive at the same time but leave earlier
+  const out = [];
+  for (const j of js) if (!out.some(o => o.arrive != null && j.arrive != null && Math.abs(o.arrive - j.arrive) < 0.5 && o.leave >= j.leave)) out.push(j);
+  // Headline = earliest arrival without a risky connection; the rest are listed by departure time.
+  const hi = out.findIndex(j => j.arrive != null && j.worst !== "bad");
+  if (hi > 0) out.unshift(out.splice(hi, 1)[0]);
+  const rest = out.slice(1).sort((a, b) => a.leave - b.leave);
+  return out.length ? [out[0], ...rest] : out;
+}
+
+/* ============================ Rendering ============================ */
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const clock = m => new Date(Date.now() + m * 60000).toLocaleTimeString("en-SG", { hour: "2-digit", minute: "2-digit", hour12: false });
+const mins = m => m < 0.5 ? "now" : Math.round(m) + " min";
+const LOAD = { SEA: "seats", SDA: "standing", LSD: "full" };
+let current = store.get("bus.tab", "orchard");
+if (current !== "times" && !TABS.some(t => t.id === current)) current = "orchard";
+
+function renderTabs() {
+  const items = TABS.map(t => [t.id, t.name]).concat([["times", "Times"]]);
+  $("#tabs").innerHTML = items.map(([id, n]) =>
+    `<button type="button" role="tab" id="tab-${id}" aria-selected="${id === current}" data-tab="${id}">${esc(n)}</button>`).join("");
+}
+function busTag(b) {
+  const parts = [b.gps ? `<span class="tag gps">GPS</span>` : `<span class="tag sched">timetable</span>`];
+  if (b.load === "LSD") parts.push(`<span class="tag sched">full</span>`);
+  return parts.join(" ");
+}
+function stepHtml(s, isFirstBus, fromHome) {
+  const l = s.leg;
+  if (l.t !== "bus") {
+    const g = l.guess && !(l.id in overrides) ? ` <span class="guess" title="Placeholder time">?</span>` : "";
+    return `<li><span class="t">${clock(s.start)}</span> ${esc(l.label)} · ${fixedMin(l)} min${g}</li>`;
+  }
+  if (s.missing) {
+    return `<li class="xfer bad"><span class="svc">${esc(l.svc.join("/"))}</span> at ${esc(STOP[l.from])}: no live bus after <span class="t">${clock(s.start)}</span> yet</li>`;
+  }
+  const b = s.bus;
+  let first = "";
+  if (s.slack == null) {
+    first = `<span class="meta">in ${mins(b.eta)}</span>`;
+  } else {
+    const g = grade(s.slack);
+    const word = { ok: "spare", warn: "tight", bad: "very tight" }[g];
+    first = `<span class="pill ${g}">${Math.max(0, Math.round(s.slack))} min ${word}${s.est ? " (est.)" : ""}</span>`;
+    if (s.backup) first += ` <span class="meta">backup ${esc(s.backup.svc)} ${clock(s.backup.eta)}</span>`;
+  }
+  return `<li class="bus ${s.slack != null ? "xfer " + grade(s.slack) : ""}">
+      <span class="svc">${esc(b.svc)}</span> <span class="t">${clock(b.eta)}</span> at ${esc(STOP[l.from])} <span class="meta">(${l.from})</span> ${first} ${busTag(b)}
+      <div class="meta">Alight ${esc(STOP[l.to])} ~${clock(s.arrive)} · ${s.liveArrive ? "live GPS match" : "estimated ride " + rideMin(b.svc, l) + " min"}</div>
+    </li>`;
+}
+function leaveHtml(j, tab) {
+  const home = tab.from.startsWith("From home");
+  if (!home) return "";
+  const g = j.leave < 1 ? "bad" : j.leave < 3 ? "warn" : "ok";
+  return `<span class="pill ${g}">${j.leave < 0.5 ? "Leave now" : "Leave in " + Math.round(j.leave) + " min"} (${clock(j.leave)})</span>`;
+}
+function overallPill(j) {
+  if (j.incomplete) return `<span class="pill bad">Waiting for live data</span>`;
+  const xfers = j.steps.filter(s => s.slack != null).length;
+  if (!xfers) return `<span class="pill ok">No transfer</span>`;
+  return { ok: `<span class="pill ok">✓ Connections OK</span>`, warn: `<span class="pill warn">! Tight connection</span>`, bad: `<span class="pill bad">✕ Risky connection</span>` }[j.worst];
+}
+function renderTab(tab) {
+  const stops = stopsFor(tab);
+  const errs = stops.filter(s => cache[s] && cache[s].err && !cache[s].json);
+  const loaded = stops.some(s => cache[s] && cache[s].json);
+  const plans = tab.routes.map(r => ({ r, js: planRoute(r) }));
+  plans.sort((a, b) => ((a.js[0] && a.js[0].arrive) ?? 1e9) - ((b.js[0] && b.js[0].arrive) ?? 1e9));
+  let h = `<div class="from">${esc(tab.from)} · routes sorted by arrival time</div>`;
+  if (errs.length) h += `<div class="err">Couldn't load ${errs.length} stop${errs.length > 1 ? "s" : ""} (${errs.join(", ")}). Check your connection, then tap Refresh.</div>`;
+  if (!loaded && !errs.length) h += `<div class="empty">Loading live arrivals…</div>`;
+  plans.forEach(({ r, js }, idx) => {
+    const j = js[0];
+    h += `<section class="card ${idx === 0 && j && j.arrive != null ? "best" : ""}">
+      <div class="head"><div class="rname">${esc(r.name)}<small>${esc(r.note || "")}</small></div>`;
+    if (j && j.arrive != null) h += `<div class="plate"><b>${clock(j.arrive)}</b><span>arrive · ${Math.round(j.arrive)} min</span></div>`;
+    else h += `<div class="plate"><b>--:--</b><span>no plan yet</span></div>`;
+    h += `</div>`;
+    if (!j) { h += `<div class="empty">${loaded ? "No catchable first bus in the live data right now." : "Waiting for arrivals…"}</div></section>`; return; }
+    h += `<div class="summary">${leaveHtml(j, tab)}${overallPill(j)}${j.estimated ? `<span class="pill">some times est.</span>` : ""}</div>`;
+    h += `<ol class="steps">${j.steps.map(s => stepHtml(s)).join("")}</ol>`;
+    if (js.length > 1) {
+      h += `<details><summary>${js.length - 1} later option${js.length > 2 ? "s" : ""}</summary><table class="later"><tbody>` +
+        js.slice(1).map(o => {
+          const firstBus = o.steps.find(s => s.bus);
+          return `<tr><td>${tab.from.startsWith("From home") ? "Leave " + clock(o.leave) : "First bus " + clock(firstBus.bus.eta)}</td><td>${o.arrive != null ? "Arrive " + clock(o.arrive) : "—"}</td><td>${overallPill(o)}</td></tr>`;
+        }).join("") + `</tbody></table></details>`;
+    }
+    h += `</section>`;
+  });
+  h += `<div class="legend">
+    <div><span class="tag gps">GPS</span> bus is being tracked live. <span class="tag sched">timetable</span> no GPS, the time is only the schedule.</div>
+    <div>Spare time at a transfer: green ${SAFE}+ min, amber ${TIGHT}–${SAFE} min, red under ${TIGHT} min. "Est." means an earlier ride time was estimated, not GPS-matched.</div>
+    <div><span class="guess">?</span> placeholder time. Set the real value under Times.</div>
+  </div>`;
+  $("#view").innerHTML = h;
+}
+function renderTimes() {
+  const rows = new Map(); // key -> {label, def, guess, group}
+  TABS.forEach(tab => tab.routes.forEach(r => r.variants.forEach(v => v.forEach(l => {
+    if (l.t === "bus") l.svc.forEach(s => { const k = rideKey(s, l); if (!rows.has(k)) rows.set(k, { tab: tab.name, label: `Bus ${s}: ${STOP[l.from]} → ${STOP[l.to]}`, def: l.ride[s], guess: false, kind: "Ride" }); });
+    else if (!rows.has(l.id)) rows.set(l.id, { tab: tab.name, label: l.label, def: l.min, guess: l.guess, kind: l.t === "walk" ? "Walk" : "Train" });
+  }))));
+  let h = `<div class="edit"><h2>Times</h2><p class="meta">Set the times from Google Maps. Ride times are only a fallback: when a bus has GPS, the app uses its live position instead. Values are saved on this phone.</p>`;
+  let lastTab = null;
+  for (const [k, v] of rows) {
+    if (v.tab !== lastTab) { h += `<h3>${esc(v.tab)}</h3>`; lastTab = v.tab; }
+    const val = k in overrides ? overrides[k] : v.def;
+    const id = "t-" + k.replace(/[^a-zA-Z0-9]/g, "-");
+    h += `<div class="row"><label for="${id}">${esc(v.label)}<span class="meta">${v.kind}${v.guess ? ' · <span class="guess">placeholder</span>' : ""} · default ${v.def}</span></label>
+      <input id="${id}" type="number" inputmode="numeric" min="0" max="180" step="1" value="${val}" data-key="${esc(k)}" data-def="${v.def}" class="${k in overrides ? "changed" : ""}"></div>`;
+  }
+  h += `<p><button class="btn" type="button" id="reset">Reset all to defaults</button></p></div>`;
+  $("#view").innerHTML = h;
+}
+function render() {
+  renderTabs();
+  if (current === "times") renderTimes(); else renderTab(TABS.find(t => t.id === current));
+}
+
+/* ============================ Refresh loop ============================ */
+let lastFetch = 0, fetching = false;
+async function refresh() {
+  if (fetching || current === "times") return;
+  fetching = true; $("#updated").textContent = "Updating…";
+  await Promise.all(stopsFor(TABS.find(t => t.id === current)).map(fetchStop));
+  fetching = false; lastFetch = Date.now();
+  $("#updated").textContent = "Updated " + clock(0);
+  render();
+}
+$("#tabs").addEventListener("click", e => {
+  const b = e.target.closest("button[data-tab]"); if (!b) return;
+  current = b.dataset.tab; store.set("bus.tab", current); render(); refresh();
+});
+$("#refresh").addEventListener("click", refresh);
+$("#view").addEventListener("change", e => {
+  const i = e.target.closest("input[data-key]"); if (!i) return;
+  const v = Number(i.value);
+  if (!Number.isFinite(v) || v < 0) return;
+  if (v === Number(i.dataset.def)) delete overrides[i.dataset.key]; else overrides[i.dataset.key] = v;
+  i.classList.toggle("changed", i.dataset.key in overrides);
+  store.set("bus.overrides", overrides);
+});
+$("#view").addEventListener("click", e => {
+  if (e.target.id === "reset") { overrides = {}; store.set("bus.overrides", overrides); renderTimes(); }
+});
+setInterval(() => {
+  if (document.hidden) return;
+  if (Date.now() - lastFetch > 30000) refresh(); else if (current !== "times") render();
+}, 10000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+render(); refresh();
+</script>
+</body>
+</html>
