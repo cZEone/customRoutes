@@ -131,7 +131,8 @@ const STOP = {
   "09047": "Orchard Stn/Tang Plaza", "72179": "HomeTeamNS", "84201": "Bedok Resvr Stn Exit A",
   "75089": "Blk 827", "75009": "Tampines Int", "96289": "Changi General Hosp", "96169": "Simei Stn",
   "75051": "Tampines West Stn Exit B", "76081": "Opp Holy Trinity Ch", "76059": "Opp Our Tampines Hub",
-  "76171": "Blk 266", "76141": "Tampines Stn/Int"
+  "76171": "Blk 266", "76141": "Tampines Stn/Int",
+  "76099": "Blk 285", "76179": "Opp Blk 266", "76149": "Opp Tampines Stn/Int", "75239": "Temasek Poly"
 };
 const walk = (id, min, label, guess) => ({ t: "walk", id, min, label, guess: !!guess });
 const train = (id, min, label, guess) => ({ t: "train", id, min, label, guess: !!guess });
@@ -232,6 +233,26 @@ const TABS = [
       home("75179", 3), bus("454", "75179", "76141", { 454: 13 }),
       bus("3", "76141", "76171", { 3: 4 }),
       walk("76171-ymps", 3, "Walk to YMPS", true)
+    ]] }
+  ]},
+  { id: "ym-home", name: "YM to hm", from: "From YMPS", leaveWord: "school", routes: [
+    { name: "34", note: "Direct", variants: [[
+      walk("ymps-76099", 3, "Walk from YMPS to Blk 285 (76099)", true),
+      bus("34", "76099", "75179", { 34: 12 }), walk("home-from-75179", 3, "Walk home")
+    ]] },
+    { name: "3 → 298", note: "Change at Opp Tampines Stn/Int", variants: [[
+      walk("ymps-76179", 3, "Walk from YMPS to Opp Blk 266 (76179)", true),
+      bus("3", "76179", "76149", { 3: 4 }),
+      bus("298", "76149", "75179", { 298: 10 }), walk("home-from-75179", 3, "Walk home")
+    ]] },
+    { name: "8 → 118 / 69", note: "Change at Temasek Poly", variants: [[
+      walk("ymps-76099", 3, "Walk from YMPS to Blk 285 (76099)", true),
+      bus("8", "76099", "75239", { 8: 9 }),
+      bus("118", "75239", "75179", { 118: 6 }), walk("home-from-75179", 3, "Walk home")
+    ], [
+      walk("ymps-76099", 3, "Walk from YMPS to Blk 285 (76099)", true),
+      bus("8", "76099", "75239", { 8: 9 }),
+      bus("69", "75239", "75151", { 69: 4 }), walk("home-from-75151", 3, "Walk home")
     ]] }
   ]}
 ];
@@ -384,11 +405,14 @@ function stepHtml(s, isFirstBus, fromHome) {
       <div class="meta">Alight ${esc(STOP[l.to])} ~${clock(s.arrive)} · ${s.liveArrive ? "live GPS match" : "estimated ride " + rideMin(b.svc, l) + " min"}</div>
     </li>`;
 }
+/* Tabs that start from a place you walk out of (home, school) show a leave time. */
+const leaveWord = tab => tab.leaveWord || (tab.from.startsWith("From home") ? "" : null);
 function leaveHtml(j, tab) {
-  const home = tab.from.startsWith("From home");
-  if (!home) return "";
+  const w = leaveWord(tab);
+  if (w == null) return "";
   const g = j.leave < 1 ? "bad" : j.leave < 3 ? "warn" : "ok";
-  return `<span class="pill ${g}">${j.leave < 0.5 ? "Leave now" : "Leave in " + Math.round(j.leave) + " min"} (${clock(j.leave)})</span>`;
+  const verb = w ? "Leave " + w : "Leave";
+  return `<span class="pill ${g}">${j.leave < 0.5 ? verb + " now" : verb + " in " + Math.round(j.leave) + " min"} (${clock(j.leave)})</span>`;
 }
 function overallPill(j) {
   if (j.incomplete) return `<span class="pill bad">Waiting for live data</span>`;
@@ -419,7 +443,7 @@ function renderTab(tab) {
       h += `<details><summary>${js.length - 1} later option${js.length > 2 ? "s" : ""}</summary><table class="later"><tbody>` +
         js.slice(1).map(o => {
           const firstBus = o.steps.find(s => s.bus);
-          return `<tr><td>${tab.from.startsWith("From home") ? "Leave " + clock(o.leave) : "First bus " + clock(firstBus.bus.eta)}</td><td>${o.arrive != null ? "Arrive " + clock(o.arrive) : "—"}</td><td>${overallPill(o)}</td></tr>`;
+          return `<tr><td>${leaveWord(tab) != null ? "Leave " + clock(o.leave) : "First bus " + clock(firstBus.bus.eta)}</td><td>${o.arrive != null ? "Arrive " + clock(o.arrive) : "—"}</td><td>${overallPill(o)}</td></tr>`;
         }).join("") + `</tbody></table></details>`;
     }
     h += `</section>`;
