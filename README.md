@@ -1,6 +1,6 @@
 # customRoutes
 
-Personal Singapore bus connection planner. One static page (`index.html`), no build step.
+**Tight Not?** Can catch or not? A personal Singapore bus connection planner. One static page (`index.html`), no build step.
 
 - Live arrivals from the free [arrivelah](https://github.com/cheeaun/arrivelah) API, called straight from the browser.
 - Each route is planned forward from the next real buses: leave time, spare minutes at every transfer, backup bus, arrival time.
