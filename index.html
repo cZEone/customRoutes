@@ -72,7 +72,7 @@ main .wrap { padding-block: 14px 40px; display: flex; flex-direction: column; ga
 .rname small { display: block; font: 400 12px/1.3 var(--f-body); color: var(--muted); margin-top: 3px; letter-spacing: 0; }
 .plate { background: var(--plate); color: var(--led); border-radius: 8px; padding: 6px 10px; text-align: right; min-width: 86px; font-variant-numeric: tabular-nums; }
 .plate b { display: block; font: 700 26px/1 var(--f-display); letter-spacing: .03em; }
-.plate span { font-size: 11px; color: var(--plate-ink); }
+.plate span { font-size: 11px; color: var(--plate-ink); white-space: nowrap; }
 .summary { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .pill { font-size: 12.5px; font-weight: 700; padding: 3px 9px; border-radius: 99px; background: var(--bg); color: var(--ink); white-space: nowrap; }
 .pill.ok { background: var(--ok-bg); color: var(--ok); }
@@ -109,7 +109,35 @@ table.later td:last-child { text-align: right; }
 .row input.changed { border-color: var(--accent); }
 .guess { color: var(--warn); font-weight: 700; }
 .btn { font: 700 14px var(--f-body); padding: 9px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); cursor: pointer; }
-@media (prefers-reduced-motion: no-preference) { .card { transition: border-color .2s; } }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--card); }
+.btn:disabled { opacity: .45; cursor: default; }
+.acts { display: flex; flex-wrap: wrap; gap: 8px; }
+.acts.small .btn { font-size: 13px; padding: 7px 12px; }
+.btn.go { padding: 7px 18px; }
+.acts .btn.go { flex: 1; padding: 10px 18px; font-size: 15px; background: var(--accent); border-color: var(--accent); color: var(--card); }
+table.later .btn.go { padding: 5px 12px; font-size: 13px; }
+table.later tr.early td:first-child { color: var(--warn); font-weight: 700; }
+/* Trip mode */
+.card.trip { border: 2px solid var(--accent); }
+.progress { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px; }
+.progress li { font: 600 13px/1 var(--f-display); letter-spacing: .03em; text-transform: uppercase; padding: 5px 8px; border-radius: 6px; background: var(--bg); color: var(--muted); }
+.progress li.done { background: var(--ok-bg); color: var(--ok); }
+.progress li.done::before { content: "✓ "; }
+.progress li.cur { background: var(--accent); color: var(--card); }
+.now { font-size: 15.5px; display: flex; flex-direction: column; gap: 6px; }
+.now b { font-size: 17px; }
+.ask { background: var(--bg); border-radius: 10px; padding: 10px 12px; font-size: 14px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.alert { border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 8px; font-size: 14.5px; border: 2px solid currentColor; }
+.alert.bad { background: var(--bad-bg); color: var(--bad); }
+.alert.warn { background: var(--warn-bg); color: var(--warn); }
+.alert b { font: 700 18px/1 var(--f-display); text-transform: uppercase; letter-spacing: .04em; }
+.alert span { color: var(--ink); }
+.tripbar { font: 700 14px var(--f-body); text-align: left; padding: 12px 14px; border-radius: 10px; border: 2px solid var(--accent); background: var(--card); color: var(--accent); cursor: pointer; }
+@media (prefers-reduced-motion: no-preference) {
+  .card { transition: border-color .2s; }
+  .alert { animation: flash .6s ease-in-out 5; }
+  @keyframes flash { 50% { box-shadow: 0 0 0 6px currentColor; } }
+}
 </style>
 </head>
 <body>
@@ -328,37 +356,63 @@ function busesAt(leg) {
 const grade = slack => slack >= SAFE ? "ok" : slack >= TIGHT ? "warn" : "bad";
 
 /* ============================ Planner ============================ */
-/* For one variant: one journey per catchable first bus. */
-function planVariant(legs) {
+const absAt = m => Date.now() + m * 60000;        // minutes from now -> timestamp
+const etaOf = at => (at - Date.now()) / 60000;    // timestamp -> minutes from now
+/* The bus in `list` whose arrival is closest to timestamp `at` (within tol minutes) */
+function closest(list, at, tol = 4) {
+  let best = null, bd = tol * 60000;
+  for (const x of list) { const d = Math.abs(absAt(x.eta) - at); if (d <= bd) { best = x; bd = d; } }
+  return best;
+}
+/*
+  Plan legs[start..] when you are ready at the start of legs[start] in t minutes.
+  target {leg, svc, at}: a specific bus you are aiming for on that leg (tracked by arrival time).
+  atStop: you are already at the stop of legs[start], so its bus has no "spare time".
+  Returns steps, arrival, the worst transfer grade, and `missed` if the target bus can't be caught.
+*/
+function continueFrom(legs, start, t, target, atStop) {
+  const steps = []; let worst = "ok", estimated = false, incomplete = false, missed = null, chosen = null;
+  for (let i = start; i < legs.length; i++) {
+    const l = legs[i];
+    if (l.t !== "bus") { steps.push({ leg: l, start: t }); t += fixedMin(l); continue; }
+    const all = busesAt(l), catchable = all.filter(x => x.eta >= t - 0.1);
+    let b = null;
+    if (target && target.leg === i) {
+      const m = closest(all.filter(x => x.svc === target.svc), target.at);
+      if (m) { if (m.eta >= t - 0.5) b = m; else missed = { leg: i, svc: target.svc, at: target.at, t }; }
+      else if (etaOf(target.at) >= t - 0.5 && etaOf(target.at) > -0.5) b = { svc: target.svc, eta: etaOf(target.at), gps: false };
+      else missed = { leg: i, svc: target.svc, at: target.at, t };
+    }
+    if (!b) {
+      if (!catchable.length) { steps.push({ leg: l, start: t, missing: true, est: estimated }); incomplete = true; break; }
+      b = catchable[0];
+    }
+    const backup = catchable.find(x => x.eta > b.eta + 0.25) || null;
+    const slack = i === start && atStop ? null : b.eta - t;
+    if (slack != null) { const g = grade(slack); if (g === "bad" || (g === "warn" && worst === "ok")) worst = g; }
+    if (!chosen) chosen = { leg: i, svc: b.svc, at: absAt(b.eta) };
+    const a = alightAt(l, b);
+    steps.push({ leg: l, bus: b, slack, backup, arrive: a.at, liveArrive: a.live, est: estimated });
+    if (!a.live) estimated = true;
+    t = a.at;
+  }
+  return { steps, arrive: incomplete ? null : t, worst, estimated, incomplete, missed, chosen };
+}
+/* For one variant: one journey per upcoming first bus. "early" = you'd already need to be walking. */
+function planVariant(legs, allowEarly) {
   const fi = legs.findIndex(l => l.t === "bus");
   const pre = legs.slice(0, fi).reduce((s, l) => s + fixedMin(l), 0);
-  const first = legs[fi];
-  const starts = busesAt(first).filter(b => b.eta - pre >= -0.25).slice(0, 4);
-  return starts.map(b0 => {
-    const leave = Math.max(0, b0.eta - pre);
+  return busesAt(legs[fi]).filter(b => allowEarly ? b.eta >= 0.25 : b.eta - pre >= -0.25).slice(0, 4).map(b0 => {
+    const leave = b0.eta - pre;
     const steps = []; let t = leave;
     for (let i = 0; i < fi; i++) { steps.push({ leg: legs[i], start: t }); t += fixedMin(legs[i]); }
-    let worst = "ok", estimated = false, incomplete = false, b = b0;
-    for (let i = fi; i < legs.length; i++) {
-      const l = legs[i];
-      if (l.t !== "bus") { steps.push({ leg: l, start: t }); t += fixedMin(l); continue; }
-      let slack = null, backup = null;
-      if (i > fi) {
-        const opts = busesAt(l).filter(x => x.eta >= t);
-        if (!opts.length) { steps.push({ leg: l, start: t, missing: true, est: estimated }); incomplete = true; break; }
-        b = opts[0]; backup = opts[1] || null; slack = b.eta - t;
-        const g = grade(slack); if (g === "bad" || (g === "warn" && worst === "ok")) worst = g;
-      }
-      const a = alightAt(l, b);
-      steps.push({ leg: l, bus: b, slack, backup, arrive: a.at, liveArrive: a.live, est: estimated });
-      if (!a.live) estimated = true;
-      t = a.at;
-    }
-    return { leave, arrive: incomplete ? null : t, steps, worst, estimated, incomplete };
+    const p = continueFrom(legs, fi, b0.eta, { leg: fi, svc: b0.svc, at: absAt(b0.eta) }, true);
+    return { legs, b0, leave, early: leave < -0.25, arrive: p.arrive, steps: steps.concat(p.steps), worst: p.worst, estimated: p.estimated, incomplete: p.incomplete };
   });
 }
-function planRoute(r) {
-  const js = r.variants.flatMap(planVariant);
+function planRoute(r, allowEarly) {
+  const all = r.variants.flatMap(v => planVariant(v, allowEarly));
+  const js = all.filter(j => !j.early), early = all.filter(j => j.early);
   js.sort((a, b) => (a.arrive ?? 1e9) - (b.arrive ?? 1e9) || b.leave - a.leave);
   // drop journeys that arrive at the same time but leave earlier
   const out = [];
@@ -367,7 +421,181 @@ function planRoute(r) {
   const hi = out.findIndex(j => j.arrive != null && j.worst !== "bad");
   if (hi > 0) out.unshift(out.splice(hi, 1)[0]);
   const rest = out.slice(1).sort((a, b) => a.leave - b.leave);
-  return out.length ? [out[0], ...rest] : out;
+  // "Already walking?" options go last, only if they beat every normal option's arrival
+  const firstArrive = Math.min(...out.map(j => j.arrive ?? 1e9));
+  const keepEarly = early.filter(j => j.arrive != null && j.arrive < firstArrive - 0.5).sort((a, b) => a.leave - b.leave).slice(0, 2);
+  return (out.length ? [out[0], ...rest] : []).concat(keepEarly);
+}
+
+/* ============================ Trip mode ============================ */
+/* A trip is a list of stages: walk/train ("move"), waiting at a stop ("wait"), on a bus ("ride"), then "done". */
+let trip = store.get("bus.trip", null);
+if (trip && (!trip.legs || trip.v !== 1)) trip = null;
+const saveTrip = () => store.set("bus.trip", trip);
+function stagesOf(legs) {
+  const S = [];
+  legs.forEach((l, i) => { if (l.t === "bus") S.push({ k: "wait", i }, { k: "ride", i }); else S.push({ k: "move", i }); });
+  S.push({ k: "done" });
+  return S;
+}
+function startTrip(tabId, ri, k) {
+  const tab = TABS.find(t => t.id === tabId), j = (lastPlans[tabId] || {})[ri] && lastPlans[tabId][ri][k];
+  if (!tab || !j) return;
+  const fi = j.legs.findIndex(l => l.t === "bus");
+  const leaves = leaveWord(tab) != null;
+  trip = {
+    v: 1, tab: tabId, name: tab.routes[ri].name, legs: j.legs, stage: 0,
+    // A trip from home starts when you leave (in the past for an "already walking" option).
+    stageAt: leaves ? absAt(j.leave) : Date.now(),
+    target: { leg: fi, svc: j.b0.svc, at: absAt(j.b0.eta) },
+    ride: null, ask: null, note: null, alert: null, alerted: []
+  };
+  if (current !== tabId) { current = tabId; store.set("bus.tab", current); }
+  saveTrip(); render(); refresh(); window.scrollTo(0, 0);
+}
+function endTrip() { trip = null; saveTrip(); render(); }
+function legDone(st) {
+  const l = trip.legs[st.i];
+  return st.k === "move" ? (l.t === "train" ? "Assumed you've reached the station." : "Assumed you've walked there.") :
+    st.k === "ride" ? `Assumed you got off at ${STOP[l.to]}.` : null;
+}
+/* Move to the next stage at time `at`. auto = time-based guess (shows a note). */
+function advance(at, auto) {
+  const S = stagesOf(trip.legs), st = S[trip.stage];
+  if (!st || st.k === "done") return;
+  if (st.k === "wait") {                         // boarding: lock onto the bus you're on
+    const l = trip.legs[st.i];
+    const arriving = busesAt(l)[0];
+    let b = auto ? null : (arriving && arriving.eta < 2 ? arriving : null);
+    if (!b && trip.target) b = closest(arrivals(l.from, trip.target.svc), trip.target.at) || { svc: trip.target.svc, eta: etaOf(trip.target.at), gps: false };
+    if (!b) b = { svc: l.svc[0], eta: 0, gps: false };
+    const a = alightAt(l, b);
+    trip.lastTarget = trip.target;
+    trip.ride = { leg: st.i, svc: b.svc, alightAt: absAt(a.at), live: a.live };
+    trip.target = null;
+    trip.ask = auto ? "boarded" : null;
+  } else {
+    if (st.k === "ride") { trip.lastRide = trip.ride; trip.ride = null; }
+    trip.ask = null;
+  }
+  trip.stage++; trip.stageAt = at; trip.note = auto ? legDone(st) : null;
+}
+function backStep() {
+  if (!trip || trip.stage === 0) return;
+  trip.stage--; trip.stageAt = Date.now(); trip.note = null; trip.ask = null;
+  const st = stagesOf(trip.legs)[trip.stage];
+  if (st.k === "ride") trip.ride = trip.lastRide || trip.ride;
+  if (st.k === "wait") { trip.ride = null; trip.target = trip.lastTarget || null; }
+}
+/* Other routes in this tab that board at stop X: is one faster now? */
+function replan(missed) {
+  const tab = TABS.find(t => t.id === trip.tab), X = trip.legs[missed.leg].from;
+  const mine = continueFrom(trip.legs, missed.leg, missed.t, null, false);
+  const key = ls => JSON.stringify(ls.map(l => [l.t, l.svc, l.from, l.to, l.id]));
+  const myKey = key(trip.legs.slice(missed.leg));
+  let best = null, others = 0;
+  tab.routes.forEach(r => r.variants.forEach(v => v.forEach((l, k) => {
+    if (l.t !== "bus" || l.from !== X || key(v.slice(k)) === myKey) return;
+    others++;
+    const p = continueFrom(v, k, missed.t, null, false);
+    if (p.arrive == null) return;
+    const score = (p.worst === "bad" ? 1e4 : 0) + p.arrive;
+    if (!best || score < best.score) best = { name: r.name, legs: v, k, p, score };
+  })));
+  return { mine, best, others };
+}
+/* Time-based guesses, bus tracking and alerts. Runs before every render. */
+function tripUpdate() {
+  if (!trip) return null;
+  const S = stagesOf(trip.legs), now = () => Date.now();
+  for (let guard = 0; guard < 16; guard++) {
+    const st = S[trip.stage];
+    if (!st || st.k === "done") break;
+    const l = trip.legs[st.i];
+    if (st.k === "move") {
+      const end = trip.stageAt + fixedMin(l) * 60000;
+      if (now() >= end) { advance(end, true); continue; }
+    } else if (st.k === "wait") {
+      if (!trip.target || trip.target.leg !== st.i) {
+        const b = busesAt(l)[0];
+        trip.target = b ? { leg: st.i, svc: b.svc, at: absAt(b.eta) } : trip.target;
+      }
+      if (trip.target) {
+        const m = closest(arrivals(l.from, trip.target.svc), trip.target.at);
+        if (m) trip.target.at = absAt(m.eta);
+        if (now() >= trip.target.at + 30000) { advance(trip.target.at + 30000, true); continue; }
+      }
+    } else if (st.k === "ride") {
+      const r = trip.ride;
+      if (r) {
+        const m = closest(arrivals(l.to, r.svc).filter(x => x.gps), r.alightAt, 5);
+        if (m) { r.alightAt = absAt(m.eta); r.live = true; }
+        if (now() >= r.alightAt + 30000) { advance(r.alightAt + 30000, true); continue; }
+      }
+    }
+    break;
+  }
+  const st = S[trip.stage];
+  if (st.k === "done" && now() - trip.stageAt > 30 * 60000) { trip = null; saveTrip(); return null; }
+  let proj = null, rem = 0;
+  if (st.k === "move") {
+    rem = Math.max(0, etaOf(trip.stageAt + fixedMin(trip.legs[st.i]) * 60000));
+    proj = continueFrom(trip.legs, st.i + 1, rem, trip.target, false);
+  } else if (st.k === "wait") {
+    proj = continueFrom(trip.legs, st.i, 0, trip.target, true);
+  } else if (st.k === "ride" && trip.ride) {
+    proj = continueFrom(trip.legs, st.i + 1, Math.max(0, etaOf(trip.ride.alightAt)), trip.target, false);
+  }
+  if (proj) {
+    if (proj.missed) {
+      const m = proj.missed, k = `m:${m.leg}:${m.svc}:${Math.round(m.at / 60000)}`;
+      if (!trip.alerted.includes(k)) {
+        trip.alerted.push(k);
+        const rp = replan(m), stop = STOP[trip.legs[m.leg].from];
+        const nb = rp.mine.steps.find(s => s.bus);
+        const next = nb ? `Next ${nb.bus.svc} at ${clock(nb.bus.eta)}${rp.mine.arrive != null ? ", arriving " + clock(rp.mine.arrive) : ""}.` : "No later bus in the live data yet.";
+        const alert = { kind: "bad", missedLeg: m.leg, text: `You'll miss the ${m.svc} at ${stop} (${clock(etaOf(m.at))}). ${next}` };
+        if (rp.best && (rp.mine.arrive == null || rp.best.p.arrive < rp.mine.arrive - 1)) {
+          alert.text += ` Faster now: ${rp.best.name} from ${stop}, arriving ${clock(rp.best.p.arrive)}.`;
+          alert.sw = { name: rp.best.name, legs: trip.legs.slice(0, m.leg).concat(rp.best.legs.slice(rp.best.k)), target: rp.best.p.chosen };
+        }
+        trip.alert = alert; buzz();
+      }
+      trip.target = proj.chosen || null;
+    } else {
+      if (proj.chosen) trip.target = proj.chosen;
+      const tight = proj.steps.find(s => s.slack != null && grade(s.slack) === "bad");
+      const started = !(st.k === "move" && trip.stageAt > now());
+      if (tight && started) {
+        const k = `t:${trip.legs.indexOf(tight.leg)}:${tight.bus.svc}:${Math.round(absAt(tight.bus.eta) / 60000)}`;
+        if (!trip.alerted.includes(k)) {
+          trip.alerted.push(k);
+          trip.alert = { kind: "warn", text: `Very tight: the ${tight.bus.svc} at ${STOP[tight.leg.from]} leaves ${clock(tight.bus.eta)}, under 1 min after you get there.${tight.backup ? ` Backup ${tight.backup.svc} at ${clock(tight.backup.eta)}.` : ""}` };
+          buzz();
+        }
+      }
+    }
+  }
+  saveTrip();
+  return { S, st, proj, rem };
+}
+function buzz() { try { navigator.vibrate && navigator.vibrate([250, 120, 250]); } catch {} }
+/* "I missed it" after the app assumed you boarded: back to waiting, aim for the next bus, alert. */
+function missedBus() {
+  const st = stagesOf(trip.legs)[trip.stage - 1];
+  if (!st || st.k !== "wait") return;
+  const missedT = trip.lastTarget;
+  trip.stage--; trip.stageAt = Date.now(); trip.ride = null; trip.ask = null; trip.note = null; trip.target = null;
+  if (missedT) {
+    const rp = replan({ leg: st.i, svc: missedT.svc, at: missedT.at, t: 0 }), stop = STOP[trip.legs[st.i].from];
+    const nb = rp.mine.steps.find(s => s.bus);
+    trip.alert = { kind: "bad", text: `Missed the ${missedT.svc} at ${stop}. ${nb ? `Next ${nb.bus.svc} at ${clock(nb.bus.eta)}${rp.mine.arrive != null ? ", arriving " + clock(rp.mine.arrive) : ""}.` : "No later bus in the live data yet."}` };
+    if (rp.best && (rp.mine.arrive == null || rp.best.p.arrive < rp.mine.arrive - 1)) {
+      trip.alert.text += ` Faster now: ${rp.best.name} from ${stop}, arriving ${clock(rp.best.p.arrive)}.`;
+      trip.alert.sw = { name: rp.best.name, legs: trip.legs.slice(0, st.i).concat(rp.best.legs.slice(rp.best.k)), target: rp.best.p.chosen };
+    }
+    buzz();
+  }
 }
 
 /* ============================ Rendering ============================ */
@@ -428,32 +656,94 @@ function overallPill(j) {
   if (!xfers) return `<span class="pill ok">No transfer</span>`;
   return { ok: `<span class="pill ok">✓ Not tight</span>`, warn: `<span class="pill warn">! A bit tight</span>`, bad: `<span class="pill bad">✕ Very tight</span>` }[j.worst];
 }
+const lastPlans = {};   // tab -> route index -> journeys, as last shown (for the Go buttons)
+const STAGE_CHIP = (st, legs) => st.k === "done" ? "Arrive" : st.k === "wait" ? "Wait" : st.k === "ride" ? legs[st.i].svc.join("/") : legs[st.i].t === "train" ? "MRT" : "Walk";
+function renderTrip(T) {
+  const { S, st, proj, rem } = T, legs = trip.legs, tab = TABS.find(t => t.id === trip.tab);
+  const l = st.i != null ? legs[st.i] : null;
+  const arrive = st.k === "done" ? etaOf(trip.stageAt) : proj && proj.arrive;
+  let h = `<section class="card trip" aria-live="polite">
+    <div class="head"><div class="rname">On the way · ${esc(trip.name)}<small>${esc(tab ? tab.name : "")} · ${esc(tab ? tab.from : "")}</small></div>
+    <div class="plate"><b>${arrive != null ? clock(arrive) : "--:--"}</b><span>${st.k === "done" ? "arrived" : arrive != null ? "arrive · " + Math.max(0, Math.round(arrive)) + " min" : "arrival unknown"}</span></div></div>`;
+  if (trip.alert) {
+    h += `<div class="alert ${trip.alert.kind}" role="alert"><b>${trip.alert.kind === "bad" ? "Connection missed" : "Heads up"}</b><span>${esc(trip.alert.text)}</span><div class="acts">` +
+      (trip.alert.sw ? `<button class="btn primary" type="button" data-act="switch">Switch to ${esc(trip.alert.sw.name)}</button><button class="btn" type="button" data-act="dismiss">Keep my route</button>` : `<button class="btn" type="button" data-act="dismiss">OK</button>`) + `</div></div>`;
+  }
+  h += `<ol class="progress">${S.map((s, ix) => `<li class="${ix < trip.stage ? "done" : ix === trip.stage ? "cur" : ""}">${esc(STAGE_CHIP(s, legs))}</li>`).join("")}</ol>`;
+  // What's happening now
+  let now = "", act = "";
+  const nextBus = proj && proj.steps.find(s => s.bus);
+  if (st.k === "move") {
+    const notStarted = trip.stageAt > Date.now() + 15000;
+    now = notStarted ? `<b>Leave in ${mins(etaOf(trip.stageAt))}</b> (${clock(etaOf(trip.stageAt))}) · ${esc(l.label)}, ${fixedMin(l)} min`
+      : `<b>${esc(l.label)}</b> · about ${mins(rem)} left`;
+    if (nextBus && legs[st.i + 1] && legs[st.i + 1].t === "bus" && nextBus.slack != null) {
+      const g = grade(nextBus.slack);
+      now += `<div>Your <span class="svc">${esc(nextBus.bus.svc)}</span> comes ${clock(nextBus.bus.eta)} (in ${mins(nextBus.bus.eta)}) <span class="pill ${g}">${Math.max(0, Math.round(nextBus.slack))} min spare</span> ${busTag(nextBus.bus)}</div>`;
+    }
+    act = notStarted ? `<button class="btn primary" type="button" data-act="leave">I'm leaving now</button>`
+      : `<button class="btn primary" type="button" data-act="next">${legs[st.i + 1] && legs[st.i + 1].t === "bus" ? "I'm at the stop" : st.i === legs.length - 1 ? "I'm there" : "Done"}</button>`;
+  } else if (st.k === "wait") {
+    now = `<b>Waiting at ${esc(STOP[l.from])}</b> <span class="meta">(${l.from})</span>`;
+    if (nextBus) now += `<div>Your <span class="svc">${esc(nextBus.bus.svc)}</span> ${clock(nextBus.bus.eta)}, in ${mins(nextBus.bus.eta)} ${busTag(nextBus.bus)}${nextBus.backup ? ` <span class="meta">· next ${esc(nextBus.backup.svc)} ${clock(nextBus.backup.eta)}</span>` : ""}</div>`;
+    act = `<button class="btn primary" type="button" data-act="next">I'm on the ${esc(nextBus ? nextBus.bus.svc : l.svc.join("/"))}</button>`;
+  } else if (st.k === "ride") {
+    const r = trip.ride;
+    now = `<b>On the ${esc(r ? r.svc : l.svc[0])} to ${esc(STOP[l.to])}</b>`;
+    if (r) now += `<div>Get off ~${clock(etaOf(r.alightAt))}, in ${mins(etaOf(r.alightAt))} · ${r.live ? '<span class="tag gps">GPS</span> tracking your bus' : "estimated"}</div>`;
+    act = `<button class="btn primary" type="button" data-act="next">I got off</button>`;
+  } else {
+    now = `<b>You've arrived.</b>`;
+    act = `<button class="btn primary" type="button" data-act="end">End trip</button>`;
+  }
+  h += `<div class="now">${now}</div>`;
+  if (trip.ask === "boarded") h += `<div class="ask">Did you get on the ${esc(trip.ride ? trip.ride.svc : "bus")}? <button class="btn" type="button" data-act="yes">Yes</button><button class="btn" type="button" data-act="missed">I missed it</button></div>`;
+  else if (trip.note) h += `<div class="ask">${esc(trip.note)} <button class="btn" type="button" data-act="back">Not yet</button></div>`;
+  h += `<div class="acts">${act}</div>`;
+  if (proj && proj.steps.length) h += `<div class="meta">Still to go</div><ol class="steps">${proj.steps.map(s => stepHtml(s)).join("")}</ol>`;
+  h += `<div class="acts small"><button class="btn" type="button" data-act="back"${trip.stage === 0 ? " disabled" : ""}>Back a step</button><button class="btn" type="button" data-act="end">End trip</button></div></section>`;
+  return h;
+}
 function renderTab(tab) {
   const stops = stopsFor(tab);
   const errs = stops.filter(s => cache[s] && cache[s].err && !cache[s].json);
   const loaded = stops.some(s => cache[s] && cache[s].json);
-  const plans = tab.routes.map(r => ({ r, js: planRoute(r) }));
+  const T = trip ? tripUpdate() : null;
+  const allowEarly = leaveWord(tab) != null;
+  const plans = tab.routes.map((r, ri) => ({ r, ri, js: planRoute(r, allowEarly) }));
+  lastPlans[tab.id] = {}; plans.forEach(p => { lastPlans[tab.id][p.ri] = p.js; });
+  const head = js => js.find(j => !j.early);
   // Rank catchable routes first (no very tight transfer), then by arrival time.
   const rank = j => !j || j.arrive == null ? 2 : j.worst === "bad" ? 1 : 0;
-  plans.sort((a, b) => rank(a.js[0]) - rank(b.js[0]) || ((a.js[0] && a.js[0].arrive) ?? 1e9) - ((b.js[0] && b.js[0].arrive) ?? 1e9));
-  let h = `<div class="from">${esc(tab.from)} · catchable routes first, then by arrival time</div>`;
+  plans.sort((a, b) => rank(head(a.js)) - rank(head(b.js)) || ((head(a.js) && head(a.js).arrive) ?? 1e9) - ((head(b.js) && head(b.js).arrive) ?? 1e9));
+  let h = "";
+  if (trip && T) {
+    if (trip.tab === tab.id) h += renderTrip(T);
+    else h += `<button class="tripbar" type="button" data-tab="${trip.tab}">On the way: ${esc(trip.name)} · tap to view</button>`;
+  }
+  h += `<div class="from">${trip && trip.tab === tab.id ? "Other routes right now · " : ""}${esc(tab.from)} · catchable routes first, then by arrival time</div>`;
   if (errs.length) h += `<div class="err">Couldn't load ${errs.length} stop${errs.length > 1 ? "s" : ""} (${errs.join(", ")}). Check your connection, then tap Refresh.</div>`;
   if (!loaded && !errs.length) h += `<div class="empty">Loading live arrivals…</div>`;
-  plans.forEach(({ r, js }, idx) => {
-    const j = js[0];
-    h += `<section class="card ${idx === 0 && j && j.arrive != null ? "best" : ""}">
+  const go = (ri, k, label) => trip ? "" : `<button class="btn go" type="button" data-go="${tab.id}|${ri}|${k}">${label}</button>`;
+  plans.forEach(({ r, ri, js }, idx) => {
+    const j = head(js), hk = js.indexOf(j);
+    h += `<section class="card ${idx === 0 && j && j.arrive != null && !trip ? "best" : ""}">
       <div class="head"><div class="rname">${esc(r.name)}<small>${esc(r.note || "")}</small></div>`;
     if (j && j.arrive != null) h += `<div class="plate"><b>${clock(j.arrive)}</b><span>arrive · ${Math.round(j.arrive)} min</span></div>`;
     else h += `<div class="plate"><b>--:--</b><span>no plan yet</span></div>`;
     h += `</div>`;
-    if (!j) { h += `<div class="empty">${loaded ? "No catchable first bus in the live data right now." : "Waiting for arrivals…"}</div></section>`; return; }
-    h += `<div class="summary">${leaveHtml(j, tab)}${overallPill(j)}${j.estimated ? `<span class="pill">some times est.</span>` : ""}</div>`;
-    h += `<ol class="steps">${j.steps.map(s => stepHtml(s)).join("")}</ol>`;
-    if (js.length > 1) {
-      h += `<details><summary>${js.length - 1} later option${js.length > 2 ? "s" : ""}</summary><table class="later"><tbody>` +
-        js.slice(1).map(o => {
-          const firstBus = o.steps.find(s => s.bus);
-          return `<tr><td>${leaveWord(tab) != null ? "Leave " + clock(o.leave) : "First bus " + clock(firstBus.bus.eta)}</td><td>${o.arrive != null ? "Arrive " + clock(o.arrive) : "—"}</td><td>${overallPill(o)}</td></tr>`;
+    if (j) {
+      h += `<div class="summary">${leaveHtml(j, tab)}${overallPill(j)}${j.estimated ? `<span class="pill">some times est.</span>` : ""}</div>`;
+      h += `<ol class="steps">${j.steps.map(s => stepHtml(s)).join("")}</ol>`;
+      if (!trip) h += `<div class="acts">${go(ri, hk, "Go")}</div>`;
+    } else h += `<div class="empty">${loaded ? "No bus you can reach in time right now." : "Waiting for arrivals…"}</div>`;
+    const later = js.filter(o => o !== j);
+    if (later.length) {
+      h += `<details${!j ? " open" : ""}><summary>${later.length} more option${later.length > 1 ? "s" : ""}</summary><table class="later"><tbody>` +
+        later.map(o => {
+          const firstBus = o.steps.find(s => s.bus), k = js.indexOf(o);
+          const when = o.early ? `Already walking? ${esc(firstBus.bus.svc)} at ${clock(firstBus.bus.eta)}` : leaveWord(tab) != null ? "Leave " + clock(o.leave) : "First bus " + clock(firstBus.bus.eta);
+          return `<tr class="${o.early ? "early" : ""}"><td>${when}</td><td>${o.arrive != null ? "Arrive " + clock(o.arrive) : "—"}</td><td>${overallPill(o)}</td><td>${go(ri, k, "Go")}</td></tr>`;
         }).join("") + `</tbody></table></details>`;
     }
     h += `</section>`;
@@ -491,9 +781,12 @@ function render() {
 /* ============================ Refresh loop ============================ */
 let lastFetch = 0, fetching = false;
 async function refresh() {
-  if (fetching || current === "times") return;
+  if (fetching || (current === "times" && !trip)) return;
   fetching = true; $("#updated").textContent = "Updating…";
-  await Promise.all(stopsFor(TABS.find(t => t.id === current)).map(fetchStop));
+  const stops = new Set();
+  [current, trip && trip.tab].forEach(id => { const t = TABS.find(x => x.id === id); if (t) stopsFor(t).forEach(s => stops.add(s)); });
+  if (trip) trip.legs.forEach(l => { if (l.t === "bus") { stops.add(l.from); stops.add(l.to); } });
+  await Promise.all([...stops].map(fetchStop));
   fetching = false; lastFetch = Date.now();
   $("#updated").textContent = "Updated " + clock(0);
   render();
@@ -512,7 +805,26 @@ $("#view").addEventListener("change", e => {
   store.set("bus.overrides", overrides);
 });
 $("#view").addEventListener("click", e => {
-  if (e.target.id === "reset") { overrides = {}; store.set("bus.overrides", overrides); renderTimes(); }
+  if (e.target.id === "reset") { overrides = {}; store.set("bus.overrides", overrides); renderTimes(); return; }
+  const g = e.target.closest("[data-go]");
+  if (g) { const [t, ri, k] = g.dataset.go.split("|"); startTrip(t, +ri, +k); return; }
+  const tb = e.target.closest(".tripbar[data-tab]");
+  if (tb) { current = tb.dataset.tab; store.set("bus.tab", current); render(); refresh(); return; }
+  const a = e.target.closest("[data-act]");
+  if (!a || !trip) return;
+  switch (a.dataset.act) {
+    case "leave": trip.stageAt = Date.now(); break;
+    case "next": advance(Date.now(), false); break;
+    case "back": backStep(); break;
+    case "yes": trip.ask = null; break;
+    case "missed": missedBus(); break;
+    case "dismiss": trip.alert = null; break;
+    case "switch":
+      if (trip.alert && trip.alert.sw) { const sw = trip.alert.sw; trip.legs = sw.legs; trip.name = sw.name; trip.target = sw.target; }
+      trip.alert = null; break;
+    case "end": endTrip(); return;
+  }
+  saveTrip(); render();
 });
 setInterval(() => {
   if (document.hidden) return;
