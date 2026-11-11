@@ -365,6 +365,31 @@ function closest(list, at, tol = 4) {
   return best;
 }
 /*
+  Find the same physical bus again in a fresh arrivals list.
+  ref = {at, lat, lng, seen}: its last known arrival time, GPS position and when we saw it.
+  GPS first: the nearest bus within the distance it could have moved since `seen`.
+  Without GPS, fall back to arrival time, but never hop to a later bus once ours is due.
+*/
+function track(list, ref) {
+  if (!ref) return null;
+  if (etaOf(ref.at) < -0.5) return null;               // ours is already due or gone: anything listed is a later bus
+  if (ref.lat && ref.lng) {
+    const gps = list.filter(x => x.gps);
+    const since = Math.min(5, Math.max(0, (Date.now() - (ref.seen || Date.now())) / 60000));
+    const maxM = 600 + 800 * since;
+    // A bus can't suddenly be due much later than it was (that would be the next bus, e.g. when buses bunch).
+    const latest = ref.at + (1.5 + 0.5 * since) * 60000;
+    let best = null, bd = maxM;
+    for (const x of gps) { const d = metres(x, ref); if (d < bd && absAt(x.eta) <= latest) { best = x; bd = d; } }
+    if (best) return best;
+    if (gps.length && etaOf(ref.at) < 1) return null;   // other buses are tracked but ours is gone: it has passed
+  }
+  if (etaOf(ref.at) < 0) return null;
+  return closest(list, ref.at, 2);
+}
+/* A tracking reference for bus b */
+const refOf = b => ({ svc: b.svc, at: absAt(b.eta), lat: b.gps ? b.lat : 0, lng: b.gps ? b.lng : 0, seen: Date.now() });
+/*
   Plan legs[start..] when you are ready at the start of legs[start] in t minutes.
   target {leg, svc, at}: a specific bus you are aiming for on that leg (tracked by arrival time).
   atStop: you are already at the stop of legs[start], so its bus has no "spare time".
@@ -378,9 +403,10 @@ function continueFrom(legs, start, t, target, atStop) {
     const all = busesAt(l), catchable = all.filter(x => x.eta >= t - 0.1);
     let b = null;
     if (target && target.leg === i) {
-      const m = closest(all.filter(x => x.svc === target.svc), target.at);
+      const m = track(all.filter(x => x.svc === target.svc), target);
       if (m) { if (m.eta >= t - 0.5) b = m; else missed = { leg: i, svc: target.svc, at: target.at, t }; }
-      else if (etaOf(target.at) >= t - 0.5 && etaOf(target.at) > -0.5) b = { svc: target.svc, eta: etaOf(target.at), gps: false };
+      // Not in the data right now (e.g. at the stop this second): keep aiming for it at its last known time.
+      else if (etaOf(target.at) >= t - 0.5 && etaOf(target.at) > -0.5) b = { svc: target.svc, eta: etaOf(target.at), gps: false, kept: true };
       else missed = { leg: i, svc: target.svc, at: target.at, t };
     }
     if (!b) {
@@ -390,7 +416,7 @@ function continueFrom(legs, start, t, target, atStop) {
     const backup = catchable.find(x => x.eta > b.eta + 0.25) || null;
     const slack = i === start && atStop ? null : b.eta - t;
     if (slack != null) { const g = grade(slack); if (g === "bad" || (g === "warn" && worst === "ok")) worst = g; }
-    if (!chosen) chosen = { leg: i, svc: b.svc, at: absAt(b.eta) };
+    if (!chosen) chosen = b.kept ? { ...target, leg: i } : { leg: i, ...refOf(b) };
     const a = alightAt(l, b);
     steps.push({ leg: l, bus: b, slack, backup, arrive: a.at, liveArrive: a.live, est: estimated });
     if (!a.live) estimated = true;
@@ -402,11 +428,14 @@ function continueFrom(legs, start, t, target, atStop) {
 function planVariant(legs, allowEarly) {
   const fi = legs.findIndex(l => l.t === "bus");
   const pre = legs.slice(0, fi).reduce((s, l) => s + fixedMin(l), 0);
-  return busesAt(legs[fi]).filter(b => allowEarly ? b.eta >= 0.25 : b.eta - pre >= -0.25).slice(0, 4).map(b0 => {
+  const buses = busesAt(legs[fi]);
+  const normal = buses.filter(b => b.eta - pre >= -0.25).slice(0, 4);
+  const early = allowEarly ? buses.filter(b => b.eta >= 0.25 && b.eta - pre < -0.25).slice(0, 2) : [];
+  return early.concat(normal).map(b0 => {
     const leave = b0.eta - pre;
     const steps = []; let t = leave;
     for (let i = 0; i < fi; i++) { steps.push({ leg: legs[i], start: t }); t += fixedMin(legs[i]); }
-    const p = continueFrom(legs, fi, b0.eta, { leg: fi, svc: b0.svc, at: absAt(b0.eta) }, true);
+    const p = continueFrom(legs, fi, b0.eta, { leg: fi, ...refOf(b0) }, true);
     return { legs, b0, leave, early: leave < -0.25, arrive: p.arrive, steps: steps.concat(p.steps), worst: p.worst, estimated: p.estimated, incomplete: p.incomplete };
   });
 }
@@ -447,7 +476,7 @@ function startTrip(tabId, ri, k) {
     v: 1, tab: tabId, name: tab.routes[ri].name, legs: j.legs, stage: 0,
     // A trip from home starts when you leave (in the past for an "already walking" option).
     stageAt: leaves ? absAt(j.leave) : Date.now(),
-    target: { leg: fi, svc: j.b0.svc, at: absAt(j.b0.eta) },
+    target: { leg: fi, ...refOf(j.b0) },
     ride: null, ask: null, note: null, alert: null, alerted: []
   };
   if (current !== tabId) { current = tabId; store.set("bus.tab", current); }
@@ -467,11 +496,12 @@ function advance(at, auto) {
     const l = trip.legs[st.i];
     const arriving = busesAt(l)[0];
     let b = auto ? null : (arriving && arriving.eta < 2 ? arriving : null);
-    if (!b && trip.target) b = closest(arrivals(l.from, trip.target.svc), trip.target.at) || { svc: trip.target.svc, eta: etaOf(trip.target.at), gps: false };
+    if (!b && trip.target) b = track(arrivals(l.from, trip.target.svc), trip.target) ||
+      { svc: trip.target.svc, eta: etaOf(trip.target.at), gps: !!trip.target.lat, lat: trip.target.lat, lng: trip.target.lng };
     if (!b) b = { svc: l.svc[0], eta: 0, gps: false };
     const a = alightAt(l, b);
     trip.lastTarget = trip.target;
-    trip.ride = { leg: st.i, svc: b.svc, alightAt: absAt(a.at), live: a.live };
+    trip.ride = { leg: st.i, svc: b.svc, alightAt: absAt(a.at), live: a.live, lat: b.gps ? b.lat : 0, lng: b.gps ? b.lng : 0, seen: Date.now() };
     trip.target = null;
     trip.ask = auto ? "boarded" : null;
   } else {
@@ -484,8 +514,19 @@ function backStep() {
   if (!trip || trip.stage === 0) return;
   trip.stage--; trip.stageAt = Date.now(); trip.note = null; trip.ask = null;
   const st = stagesOf(trip.legs)[trip.stage];
-  if (st.k === "ride") trip.ride = trip.lastRide || trip.ride;
-  if (st.k === "wait") { trip.ride = null; trip.target = trip.lastTarget || null; }
+  // The restored time has usually passed: push it at least 2 min ahead until live data says otherwise.
+  const ahead = r => r && { ...r, seen: Date.now() };
+  if (st.k === "ride") {
+    const r = ahead(trip.lastRide || trip.ride);
+    if (r) r.alightAt = Math.max(r.alightAt, Date.now() + 120000);
+    trip.ride = r;
+  }
+  if (st.k === "wait") {
+    trip.ride = null;
+    const t = ahead(trip.lastTarget);
+    if (t) t.at = Math.max(t.at, Date.now() + 120000);
+    trip.target = t || null;
+  }
 }
 /* Other routes in this tab that board at stop X: is one faster now? */
 function replan(missed) {
@@ -493,16 +534,33 @@ function replan(missed) {
   const mine = continueFrom(trip.legs, missed.leg, missed.t, null, false);
   const key = ls => JSON.stringify(ls.map(l => [l.t, l.svc, l.from, l.to, l.id]));
   const myKey = key(trip.legs.slice(missed.leg));
-  let best = null, others = 0;
+  let best = null;
   tab.routes.forEach(r => r.variants.forEach(v => v.forEach((l, k) => {
     if (l.t !== "bus" || l.from !== X || key(v.slice(k)) === myKey) return;
-    others++;
     const p = continueFrom(v, k, missed.t, null, false);
     if (p.arrive == null) return;
     const score = (p.worst === "bad" ? 1e4 : 0) + p.arrive;
     if (!best || score < best.score) best = { name: r.name, legs: v, k, p, score };
   })));
-  return { mine, best, others };
+  return { mine, best };
+}
+/* The flashing alert for a missed bus, with a switch offer when another route from that stop is faster. */
+function missedAlert(missed, lead) {
+  const rp = replan(missed), stop = STOP[trip.legs[missed.leg].from];
+  const nb = rp.mine.steps.find(s => s.bus);
+  const next = nb ? `Next ${nb.bus.svc} at ${clock(nb.bus.eta)}${rp.mine.arrive != null ? ", arriving " + clock(rp.mine.arrive) : ""}.` : "No later bus in the live data yet.";
+  const alert = { kind: "bad", text: `${lead} ${next}` };
+  if (rp.best && (rp.mine.arrive == null || rp.best.p.arrive < rp.mine.arrive - 1)) {
+    const { k, p } = rp.best;
+    alert.text += ` Faster now: ${rp.best.name} from ${stop}, arriving ${clock(p.arrive)}.`;
+    alert.sw = {
+      name: rp.best.name, fromLeg: missed.leg,
+      legs: trip.legs.slice(0, missed.leg).concat(rp.best.legs.slice(k)),
+      // chosen.leg counts from the start of the other route's legs; shift it into the combined legs
+      target: p.chosen ? { ...p.chosen, leg: p.chosen.leg - k + missed.leg } : null
+    };
+  }
+  return alert;
 }
 /* Time-based guesses, bus tracking and alerts. Runs before every render. */
 function tripUpdate() {
@@ -517,25 +575,26 @@ function tripUpdate() {
       if (now() >= end) { advance(end, true); continue; }
     } else if (st.k === "wait") {
       if (!trip.target || trip.target.leg !== st.i) {
-        const b = busesAt(l)[0];
-        trip.target = b ? { leg: st.i, svc: b.svc, at: absAt(b.eta) } : trip.target;
+        const b = busesAt(l).find(x => x.eta > -0.25);
+        trip.target = b ? { leg: st.i, ...refOf(b) } : trip.target;
       }
       if (trip.target) {
-        const m = closest(arrivals(l.from, trip.target.svc), trip.target.at);
-        if (m) trip.target.at = absAt(m.eta);
+        const m = track(arrivals(l.from, trip.target.svc), trip.target);
+        if (m) Object.assign(trip.target, refOf(m));
         if (now() >= trip.target.at + 30000) { advance(trip.target.at + 30000, true); continue; }
       }
     } else if (st.k === "ride") {
       const r = trip.ride;
       if (r) {
-        const m = closest(arrivals(l.to, r.svc).filter(x => x.gps), r.alightAt, 5);
-        if (m) { r.alightAt = absAt(m.eta); r.live = true; }
+        const m = track(arrivals(l.to, r.svc), { at: r.alightAt, lat: r.lat, lng: r.lng, seen: r.seen });
+        if (m) { r.alightAt = absAt(m.eta); r.live = r.live || m.gps; if (m.gps) { r.lat = m.lat; r.lng = m.lng; r.seen = Date.now(); } }
         if (now() >= r.alightAt + 30000) { advance(r.alightAt + 30000, true); continue; }
       }
     }
     break;
   }
   const st = S[trip.stage];
+  if (trip.alert && trip.alert.sw && trip.stage > switchLimit(trip.alert.sw)) { delete trip.alert.sw; }
   if (st.k === "done" && now() - trip.stageAt > 30 * 60000) { trip = null; saveTrip(); return null; }
   let proj = null, rem = 0;
   if (st.k === "move") {
@@ -551,15 +610,8 @@ function tripUpdate() {
       const m = proj.missed, k = `m:${m.leg}:${m.svc}:${Math.round(m.at / 60000)}`;
       if (!trip.alerted.includes(k)) {
         trip.alerted.push(k);
-        const rp = replan(m), stop = STOP[trip.legs[m.leg].from];
-        const nb = rp.mine.steps.find(s => s.bus);
-        const next = nb ? `Next ${nb.bus.svc} at ${clock(nb.bus.eta)}${rp.mine.arrive != null ? ", arriving " + clock(rp.mine.arrive) : ""}.` : "No later bus in the live data yet.";
-        const alert = { kind: "bad", missedLeg: m.leg, text: `You'll miss the ${m.svc} at ${stop} (${clock(etaOf(m.at))}). ${next}` };
-        if (rp.best && (rp.mine.arrive == null || rp.best.p.arrive < rp.mine.arrive - 1)) {
-          alert.text += ` Faster now: ${rp.best.name} from ${stop}, arriving ${clock(rp.best.p.arrive)}.`;
-          alert.sw = { name: rp.best.name, legs: trip.legs.slice(0, m.leg).concat(rp.best.legs.slice(rp.best.k)), target: rp.best.p.chosen };
-        }
-        trip.alert = alert; buzz();
+        trip.alert = missedAlert(m, `You'll miss the ${m.svc} at ${STOP[trip.legs[m.leg].from]} (${clock(etaOf(m.at))}).`);
+        buzz();
       }
       trip.target = proj.chosen || null;
     } else {
@@ -579,6 +631,8 @@ function tripUpdate() {
   saveTrip();
   return { S, st, proj, rem };
 }
+/* The last stage at which a switch still makes sense: waiting for the missed leg's bus. */
+const switchLimit = sw => stagesOf(trip.legs).findIndex(s => s.k === "wait" && s.i === sw.fromLeg);
 function buzz() { try { navigator.vibrate && navigator.vibrate([250, 120, 250]); } catch {} }
 /* "I missed it" after the app assumed you boarded: back to waiting, aim for the next bus, alert. */
 function missedBus() {
@@ -586,14 +640,12 @@ function missedBus() {
   if (!st || st.k !== "wait") return;
   const missedT = trip.lastTarget;
   trip.stage--; trip.stageAt = Date.now(); trip.ride = null; trip.ask = null; trip.note = null; trip.target = null;
+  // Aim for the first bus that comes after the one that just left (it can linger in the data for a few seconds).
+  const after = missedT ? missedT.at + 60000 : Date.now();
+  const nextBus = busesAt(trip.legs[st.i]).find(x => absAt(x.eta) > after && x.eta > 0.5);
+  if (nextBus) trip.target = { leg: st.i, ...refOf(nextBus) };
   if (missedT) {
-    const rp = replan({ leg: st.i, svc: missedT.svc, at: missedT.at, t: 0 }), stop = STOP[trip.legs[st.i].from];
-    const nb = rp.mine.steps.find(s => s.bus);
-    trip.alert = { kind: "bad", text: `Missed the ${missedT.svc} at ${stop}. ${nb ? `Next ${nb.bus.svc} at ${clock(nb.bus.eta)}${rp.mine.arrive != null ? ", arriving " + clock(rp.mine.arrive) : ""}.` : "No later bus in the live data yet."}` };
-    if (rp.best && (rp.mine.arrive == null || rp.best.p.arrive < rp.mine.arrive - 1)) {
-      trip.alert.text += ` Faster now: ${rp.best.name} from ${stop}, arriving ${clock(rp.best.p.arrive)}.`;
-      trip.alert.sw = { name: rp.best.name, legs: trip.legs.slice(0, st.i).concat(rp.best.legs.slice(rp.best.k)), target: rp.best.p.chosen };
-    }
+    trip.alert = missedAlert({ leg: st.i, svc: missedT.svc, at: missedT.at, t: 0 }, `Missed the ${missedT.svc} at ${STOP[trip.legs[st.i].from]}.`);
     buzz();
   }
 }
@@ -708,7 +760,7 @@ function renderTab(tab) {
   const stops = stopsFor(tab);
   const errs = stops.filter(s => cache[s] && cache[s].err && !cache[s].json);
   const loaded = stops.some(s => cache[s] && cache[s].json);
-  const T = trip ? tripUpdate() : null;
+  const T = tripState;
   const allowEarly = leaveWord(tab) != null;
   const plans = tab.routes.map((r, ri) => ({ r, ri, js: planRoute(r, allowEarly) }));
   lastPlans[tab.id] = {}; plans.forEach(p => { lastPlans[tab.id][p.ri] = p.js; });
@@ -773,7 +825,9 @@ function renderTimes() {
   h += `<p><button class="btn" type="button" id="reset">Reset all to defaults</button></p></div>`;
   $("#view").innerHTML = h;
 }
+let tripState = null;
 function render() {
+  tripState = trip ? tripUpdate() : null;
   renderTabs();
   if (current === "times") renderTimes(); else renderTab(TABS.find(t => t.id === current));
 }
@@ -820,7 +874,9 @@ $("#view").addEventListener("click", e => {
     case "missed": missedBus(); break;
     case "dismiss": trip.alert = null; break;
     case "switch":
-      if (trip.alert && trip.alert.sw) { const sw = trip.alert.sw; trip.legs = sw.legs; trip.name = sw.name; trip.target = sw.target; }
+      if (trip.alert && trip.alert.sw && trip.stage <= switchLimit(trip.alert.sw)) {
+        const sw = trip.alert.sw; trip.legs = sw.legs; trip.name = sw.name; trip.target = sw.target;
+      }
       trip.alert = null; break;
     case "end": endTrip(); return;
   }
