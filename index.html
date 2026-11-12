@@ -120,10 +120,10 @@ table.later tr.early td:first-child { color: var(--warn); font-weight: 700; }
 /* Trip mode */
 .card.trip { border: 2px solid var(--accent); }
 .progress { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px; }
-.progress li { font: 600 13px/1 var(--f-display); letter-spacing: .03em; text-transform: uppercase; padding: 5px 8px; border-radius: 6px; background: var(--bg); color: var(--muted); }
-.progress li.done { background: var(--ok-bg); color: var(--ok); }
-.progress li.done::before { content: "✓ "; }
-.progress li.cur { background: var(--accent); color: var(--card); }
+.progress button { font: 600 13px/1 var(--f-display); letter-spacing: .03em; text-transform: uppercase; padding: 7px 9px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--muted); cursor: pointer; }
+.progress button.done { background: var(--ok-bg); color: var(--ok); border-color: transparent; }
+.progress button.done::before { content: "✓ "; }
+.progress button.cur { background: var(--accent); color: var(--card); border-color: var(--accent); }
 .now { font-size: 15.5px; display: flex; flex-direction: column; gap: 6px; }
 .now b { font-size: 17px; }
 .ask { background: var(--bg); border-radius: 10px; padding: 10px 12px; font-size: 14px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
@@ -509,6 +509,29 @@ function advance(at, auto) {
     trip.ask = null;
   }
   trip.stage++; trip.stageAt = at; trip.note = auto ? legDone(st) : null;
+  const ns = S[trip.stage];
+  if (ns && ns.k === "wait") aimNextBus(ns.i);
+}
+/* You're at the stop of legs[i] now: aim for the next bus that's actually coming, not the one planned from home. */
+function aimNextBus(i) {
+  const b = busesAt(trip.legs[i]).find(x => x.eta > -0.25);
+  trip.target = b ? { leg: i, ...refOf(b) } : null;
+}
+/* "I'm here now": jump to any stage, e.g. when you tapped Go only after reaching the second stop. */
+function jumpTo(ix) {
+  const S = stagesOf(trip.legs), st = S[ix];
+  if (!st) return;
+  trip.stage = ix; trip.stageAt = Date.now(); trip.note = null; trip.ask = null; trip.alert = null;
+  trip.ride = null; trip.lastRide = null; trip.lastTarget = null; trip.target = null;
+  if (st.k === "wait") aimNextBus(st.i);
+  if (st.k === "ride") {
+    // You're already on this bus: assume it's the next one of that service due at your drop-off stop.
+    const l = trip.legs[st.i];
+    const b = l.svc.flatMap(sv => arrivals(l.to, sv)).filter(x => x.eta >= 0).sort((a, c) => a.eta - c.eta)[0];
+    trip.ride = b
+      ? { leg: st.i, svc: b.svc, alightAt: absAt(b.eta), live: b.gps, lat: b.gps ? b.lat : 0, lng: b.gps ? b.lng : 0, seen: Date.now() }
+      : { leg: st.i, svc: l.svc[0], alightAt: absAt(rideMin(l.svc[0], l)), live: false, lat: 0, lng: 0, seen: Date.now() };
+  }
 }
 function backStep() {
   if (!trip || trip.stage === 0) return;
@@ -721,7 +744,9 @@ function renderTrip(T) {
     h += `<div class="alert ${trip.alert.kind}" role="alert"><b>${trip.alert.kind === "bad" ? "Connection missed" : "Heads up"}</b><span>${esc(trip.alert.text)}</span><div class="acts">` +
       (trip.alert.sw ? `<button class="btn primary" type="button" data-act="switch">Switch to ${esc(trip.alert.sw.name)}</button><button class="btn" type="button" data-act="dismiss">Keep my route</button>` : `<button class="btn" type="button" data-act="dismiss">OK</button>`) + `</div></div>`;
   }
-  h += `<ol class="progress">${S.map((s, ix) => `<li class="${ix < trip.stage ? "done" : ix === trip.stage ? "cur" : ""}">${esc(STAGE_CHIP(s, legs))}</li>`).join("")}</ol>`;
+  const where = s => s.k === "done" ? "I've arrived" : s.k === "wait" ? `I'm at ${STOP[legs[s.i].from]}` : s.k === "ride" ? `I'm on the ${legs[s.i].svc.join("/")}` : `I'm on this step: ${legs[s.i].label}`;
+  h += `<ol class="progress">${S.map((s, ix) => `<li><button type="button" data-act="jump" data-stage="${ix}" class="${ix < trip.stage ? "done" : ix === trip.stage ? "cur" : ""}" aria-current="${ix === trip.stage ? "step" : "false"}" title="${esc(where(s))}">${esc(STAGE_CHIP(s, legs))}</button></li>`).join("")}</ol>
+    <div class="meta">Further along already? Tap the step you're on now.</div>`;
   // What's happening now
   let now = "", act = "";
   const nextBus = proj && proj.steps.find(s => s.bus);
@@ -868,6 +893,7 @@ $("#view").addEventListener("click", e => {
   if (!a || !trip) return;
   switch (a.dataset.act) {
     case "leave": trip.stageAt = Date.now(); break;
+    case "jump": jumpTo(+a.dataset.stage); break;
     case "next": advance(Date.now(), false); break;
     case "back": backStep(); break;
     case "yes": trip.ask = null; break;
