@@ -488,6 +488,22 @@ function legDone(st) {
   return st.k === "move" ? (l.t === "train" ? "Assumed you've reached the station." : "Assumed you've walked there.") :
     st.k === "ride" ? `Assumed you got off at ${STOP[l.to]}.` : null;
 }
+/* The bus you're riding on legs[i]: b is the bus, alightEta its minutes to your drop-off stop. */
+const rideOf = (i, b, alightEta, live) => ({ leg: i, svc: b.svc, alightAt: absAt(alightEta), live: !!live, lat: b.gps ? b.lat : 0, lng: b.gps ? b.lng : 0, seen: Date.now() });
+/*
+  You say you're already on a bus of legs[i], but we don't know which one. Candidates are buses due at your
+  drop-off stop that have already passed your boarding stop (so they no longer show up there by GPS).
+  Returns them latest-first: someone who has just boarded is on the one furthest back.
+*/
+function rideGuesses(i) {
+  const l = trip.legs[i];
+  const out = l.svc.flatMap(sv => {
+    const atFrom = arrivals(l.from, sv).filter(x => x.gps);
+    return arrivals(l.to, sv).filter(c => c.eta >= 0 && c.eta <= rideMin(sv, l) * 1.5 + 3 &&
+      !(c.gps && atFrom.some(f => metres(f, c) < 80 && f.eta <= c.eta)));
+  }).sort((a, c) => c.eta - a.eta).map(b => rideOf(i, b, b.eta, b.gps));
+  return out.length ? out : [rideOf(i, { svc: l.svc[0], gps: false }, rideMin(l.svc[0], l), false)];
+}
 /* Move to the next stage at time `at`. auto = time-based guess (shows a note). */
 function advance(at, auto) {
   const S = stagesOf(trip.legs), st = S[trip.stage];
@@ -501,37 +517,49 @@ function advance(at, auto) {
     if (!b) b = { svc: l.svc[0], eta: 0, gps: false };
     const a = alightAt(l, b);
     trip.lastTarget = trip.target;
-    trip.ride = { leg: st.i, svc: b.svc, alightAt: absAt(a.at), live: a.live, lat: b.gps ? b.lat : 0, lng: b.gps ? b.lng : 0, seen: Date.now() };
+    trip.ride = rideOf(st.i, b, a.at, a.live);
     trip.target = null;
     trip.ask = auto ? "boarded" : null;
   } else {
     if (st.k === "ride") { trip.lastRide = trip.ride; trip.ride = null; }
     trip.ask = null;
   }
-  trip.stage++; trip.stageAt = at; trip.note = auto ? legDone(st) : null;
+  trip.stage++; trip.stageAt = at; trip.note = auto ? legDone(st) : null; trip.picks = null; trip.undo = null;
+  // You tapped that you're at a stop: aim for the next bus actually coming. A time-based guess keeps the planned
+  // bus, so catching up after the phone was locked still works, and a planned bus that already left is kept too,
+  // so it gets reported as missed instead of being silently replaced.
   const ns = S[trip.stage];
-  if (ns && ns.k === "wait") aimNextBus(ns.i);
+  if (!auto && ns && ns.k === "wait") {
+    const t = trip.target && trip.target.leg === ns.i ? trip.target : null;
+    if (!(t && etaOf(t.at) < -0.5)) aimNextBus(ns.i);
+  }
 }
 /* You're at the stop of legs[i] now: aim for the next bus that's actually coming, not the one planned from home. */
 function aimNextBus(i) {
   const b = busesAt(trip.legs[i]).find(x => x.eta > -0.25);
-  trip.target = b ? { leg: i, ...refOf(b) } : null;
+  if (b) trip.target = { leg: i, ...refOf(b) };
+  else if (!trip.target || trip.target.leg !== i) trip.target = null;
 }
+const TRIP_STATE = ["stage", "stageAt", "target", "ride", "lastRide", "lastTarget", "alert", "ask", "note", "alerted", "picks"];
 /* "I'm here now": jump to any stage, e.g. when you tapped Go only after reaching the second stop. */
 function jumpTo(ix) {
   const S = stagesOf(trip.legs), st = S[ix];
-  if (!st) return;
+  if (!st || ix === trip.stage) return;          // tapping the step you're already on changes nothing
+  const undo = {}; TRIP_STATE.forEach(k => { undo[k] = trip[k]; });
+  trip.undo = JSON.parse(JSON.stringify(undo));  // one tap of Undo puts everything back
   trip.stage = ix; trip.stageAt = Date.now(); trip.note = null; trip.ask = null; trip.alert = null;
-  trip.ride = null; trip.lastRide = null; trip.lastTarget = null; trip.target = null;
+  trip.ride = null; trip.lastRide = null; trip.lastTarget = null; trip.target = null; trip.picks = null;
+  trip.alerted = [];                             // a new starting point: earlier alerts may apply again
   if (st.k === "wait") aimNextBus(st.i);
-  if (st.k === "ride") {
-    // You're already on this bus: assume it's the next one of that service due at your drop-off stop.
-    const l = trip.legs[st.i];
-    const b = l.svc.flatMap(sv => arrivals(l.to, sv)).filter(x => x.eta >= 0).sort((a, c) => a.eta - c.eta)[0];
-    trip.ride = b
-      ? { leg: st.i, svc: b.svc, alightAt: absAt(b.eta), live: b.gps, lat: b.gps ? b.lat : 0, lng: b.gps ? b.lng : 0, seen: Date.now() }
-      : { leg: st.i, svc: l.svc[0], alightAt: absAt(rideMin(l.svc[0], l)), live: false, lat: 0, lng: 0, seen: Date.now() };
-  }
+  if (st.k === "ride") setRideGuess(st.i);
+}
+function setRideGuess(i) {
+  const g = rideGuesses(i);
+  trip.ride = g[0]; trip.picks = g.length > 1 ? g : null;
+}
+function undoJump() {
+  if (!trip.undo) return;
+  Object.assign(trip, trip.undo); trip.undo = null;
 }
 function backStep() {
   if (!trip || trip.stage === 0) return;
@@ -541,9 +569,11 @@ function backStep() {
   const ahead = r => r && { ...r, seen: Date.now() };
   if (st.k === "ride") {
     const r = ahead(trip.lastRide || trip.ride);
-    if (r) r.alightAt = Math.max(r.alightAt, Date.now() + 120000);
-    trip.ride = r;
+    if (r) { r.alightAt = Math.max(r.alightAt, Date.now() + 120000); trip.ride = r; }
+    else setRideGuess(st.i);                     // nothing to restore (e.g. after a jump): work out the bus afresh
   }
+  // Back to walking: forget the bus aimed for at the stop, so the plan picks one you can reach from here.
+  if (st.k === "move") trip.target = null;
   if (st.k === "wait") {
     trip.ride = null;
     const t = ahead(trip.lastTarget);
@@ -597,16 +627,16 @@ function tripUpdate() {
       const end = trip.stageAt + fixedMin(l) * 60000;
       if (now() >= end) { advance(end, true); continue; }
     } else if (st.k === "wait") {
-      if (!trip.target || trip.target.leg !== st.i) {
-        const b = busesAt(l).find(x => x.eta > -0.25);
-        trip.target = b ? { leg: st.i, ...refOf(b) } : trip.target;
-      }
+      if (!trip.target || trip.target.leg !== st.i) aimNextBus(st.i);
       if (trip.target) {
         const m = track(arrivals(l.from, trip.target.svc), trip.target);
         if (m) Object.assign(trip.target, refOf(m));
-        if (now() >= trip.target.at + 30000) { advance(trip.target.at + 30000, true); continue; }
+        // A bus that left before you reached the stop is a miss (reported below), not a boarding.
+        const leftBeforeYou = trip.target.at + 30000 < trip.stageAt;
+        if (!leftBeforeYou && now() >= trip.target.at + 30000) { advance(trip.target.at + 30000, true); continue; }
       }
     } else if (st.k === "ride") {
+      if (!trip.ride) setRideGuess(st.i);
       const r = trip.ride;
       if (r) {
         const m = track(arrivals(l.to, r.svc), { at: r.alightAt, lat: r.lat, lng: r.lng, seen: r.seen });
@@ -774,6 +804,11 @@ function renderTrip(T) {
     act = `<button class="btn primary" type="button" data-act="end">End trip</button>`;
   }
   h += `<div class="now">${now}</div>`;
+  if (trip.undo) h += `<div class="ask">Moved to this step. <button class="btn" type="button" data-act="undo">Undo</button></div>`;
+  if (st.k === "ride" && trip.picks && trip.picks.length > 1) {
+    h += `<div class="ask">Which ${esc(l.svc.join("/"))} are you on? ` + trip.picks.map((r, ix) =>
+      `<button class="btn${trip.ride && Math.abs(r.alightAt - trip.ride.alightAt) < 45000 && r.svc === trip.ride.svc ? " primary" : ""}" type="button" data-act="pick" data-i="${ix}">${esc(r.svc)} · gets there ${clock(etaOf(r.alightAt))}</button>`).join("") + `</div>`;
+  }
   if (trip.ask === "boarded") h += `<div class="ask">Did you get on the ${esc(trip.ride ? trip.ride.svc : "bus")}? <button class="btn" type="button" data-act="yes">Yes</button><button class="btn" type="button" data-act="missed">I missed it</button></div>`;
   else if (trip.note) h += `<div class="ask">${esc(trip.note)} <button class="btn" type="button" data-act="back">Not yet</button></div>`;
   h += `<div class="acts">${act}</div>`;
@@ -891,9 +926,13 @@ $("#view").addEventListener("click", e => {
   if (tb) { current = tb.dataset.tab; store.set("bus.tab", current); render(); refresh(); return; }
   const a = e.target.closest("[data-act]");
   if (!a || !trip) return;
-  switch (a.dataset.act) {
+  const act = a.dataset.act;
+  if (act !== "jump" && act !== "undo" && act !== "pick" && act !== "dismiss") { trip.undo = null; trip.picks = null; }
+  switch (act) {
     case "leave": trip.stageAt = Date.now(); break;
     case "jump": jumpTo(+a.dataset.stage); break;
+    case "undo": undoJump(); break;
+    case "pick": if (trip.picks && trip.picks[+a.dataset.i]) { trip.ride = { ...trip.picks[+a.dataset.i], seen: Date.now() }; } break;
     case "next": advance(Date.now(), false); break;
     case "back": backStep(); break;
     case "yes": trip.ask = null; break;
