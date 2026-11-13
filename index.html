@@ -65,6 +65,10 @@ nav button:focus-visible, button:focus-visible, input:focus-visible, summary:foc
 header button:focus-visible { outline-color: var(--hdr-ink); }
 main .wrap { padding-block: 14px 40px; display: flex; flex-direction: column; gap: 12px; }
 .from { font-size: 13px; color: var(--muted); }
+.here { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); }
+.here span { font-weight: 700; color: var(--ink); }
+.here button { font: 700 13px var(--f-body); padding: 7px 11px; border-radius: 99px; border: 1px solid var(--line); background: var(--card); color: var(--ink); cursor: pointer; }
+.here button.cur { background: var(--accent); border-color: var(--accent); color: var(--card); }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .card.best { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
@@ -425,22 +429,24 @@ function continueFrom(legs, start, t, target, atStop) {
   return { steps, arrive: incomplete ? null : t, worst, estimated, incomplete, missed, chosen };
 }
 /* For one variant: one journey per upcoming first bus. "early" = you'd already need to be walking. */
-function planVariant(legs, allowEarly) {
+/* hereStop: the stop you say you're standing at. A variant boarding there needs no walk or train first. */
+function planVariant(legs, allowEarly, hereStop) {
   const fi = legs.findIndex(l => l.t === "bus");
-  const pre = legs.slice(0, fi).reduce((s, l) => s + fixedMin(l), 0);
+  const atStop = !!hereStop && legs[fi].from === hereStop;
+  const pre = atStop ? 0 : legs.slice(0, fi).reduce((s, l) => s + fixedMin(l), 0);
   const buses = busesAt(legs[fi]);
   const normal = buses.filter(b => b.eta - pre >= -0.25).slice(0, 4);
-  const early = allowEarly ? buses.filter(b => b.eta >= 0.25 && b.eta - pre < -0.25).slice(0, 2) : [];
+  const early = allowEarly && !atStop ? buses.filter(b => b.eta >= 0.25 && b.eta - pre < -0.25).slice(0, 2) : [];
   return early.concat(normal).map(b0 => {
     const leave = b0.eta - pre;
     const steps = []; let t = leave;
-    for (let i = 0; i < fi; i++) { steps.push({ leg: legs[i], start: t }); t += fixedMin(legs[i]); }
+    if (!atStop) for (let i = 0; i < fi; i++) { steps.push({ leg: legs[i], start: t }); t += fixedMin(legs[i]); }
     const p = continueFrom(legs, fi, b0.eta, { leg: fi, ...refOf(b0) }, true);
-    return { legs, b0, leave, early: leave < -0.25, arrive: p.arrive, steps: steps.concat(p.steps), worst: p.worst, estimated: p.estimated, incomplete: p.incomplete };
+    return { legs, b0, leave, atStop, early: leave < -0.25, arrive: p.arrive, steps: steps.concat(p.steps), worst: p.worst, estimated: p.estimated, incomplete: p.incomplete };
   });
 }
-function planRoute(r, allowEarly) {
-  const all = r.variants.flatMap(v => planVariant(v, allowEarly));
+function planRoute(r, allowEarly, hereStop) {
+  const all = r.variants.flatMap(v => planVariant(v, allowEarly, hereStop));
   const js = all.filter(j => !j.early), early = all.filter(j => j.early);
   js.sort((a, b) => (a.arrive ?? 1e9) - (b.arrive ?? 1e9) || b.leave - a.leave);
   // drop journeys that arrive at the same time but leave earlier
@@ -450,9 +456,10 @@ function planRoute(r, allowEarly) {
   const hi = out.findIndex(j => j.arrive != null && j.worst !== "bad");
   if (hi > 0) out.unshift(out.splice(hi, 1)[0]);
   const rest = out.slice(1).sort((a, b) => a.leave - b.leave);
-  // "Already walking?" options go last, only if they beat every normal option's arrival
+  // "Already on your way?" options go last: when they beat every normal option's arrival,
+  // or when there is no normal option at all (even if the full arrival time isn't known yet).
   const firstArrive = Math.min(...out.map(j => j.arrive ?? 1e9));
-  const keepEarly = early.filter(j => j.arrive != null && j.arrive < firstArrive - 0.5).sort((a, b) => a.leave - b.leave).slice(0, 2);
+  const keepEarly = early.filter(j => !out.length || (j.arrive != null && j.arrive < firstArrive - 0.5)).sort((a, b) => a.leave - b.leave).slice(0, 2);
   return (out.length ? [out[0], ...rest] : []).concat(keepEarly);
 }
 
@@ -473,9 +480,11 @@ function startTrip(tabId, ri, k) {
   const fi = j.legs.findIndex(l => l.t === "bus");
   const leaves = leaveWord(tab) != null;
   trip = {
-    v: 1, tab: tabId, name: tab.routes[ri].name, legs: j.legs, stage: 0,
-    // A trip from home starts when you leave (in the past for an "already walking" option).
-    stageAt: leaves ? absAt(j.leave) : Date.now(),
+    v: 1, tab: tabId, name: tab.routes[ri].name, legs: j.legs,
+    // Planned from the stop you're at: start there, waiting. Otherwise start at the first step.
+    stage: j.atStop ? stagesOf(j.legs).findIndex(s => s.k === "wait" && s.i === fi) : 0,
+    // A trip from home starts when you leave (in the past for an "already on your way" option).
+    stageAt: !j.atStop && (leaves || j.early) ? absAt(j.leave) : Date.now(),
     target: { leg: fi, ...refOf(j.b0) },
     ride: null, ask: null, note: null, alert: null, alerted: []
   };
@@ -749,6 +758,7 @@ function stepHtml(s, isFirstBus, fromHome) {
 /* Tabs that start from a place you walk out of (home, school) show a leave time. */
 const leaveWord = tab => tab.leaveWord || (tab.from.startsWith("From home") ? "" : null);
 function leaveHtml(j, tab) {
+  if (j.atStop) return `<span class="pill ok">Bus in ${mins(j.b0.eta)} (${clock(j.b0.eta)})</span>`;
   const w = leaveWord(tab);
   if (w == null) return "";
   const g = j.leave < 1 ? "bad" : j.leave < 3 ? "warn" : "ok";
@@ -760,6 +770,17 @@ function overallPill(j) {
   const xfers = j.steps.filter(s => s.slack != null).length;
   if (!xfers) return `<span class="pill ok">No transfer</span>`;
   return { ok: `<span class="pill ok">✓ Not tight</span>`, warn: `<span class="pill warn">! A bit tight</span>`, bad: `<span class="pill bad">✕ Very tight</span>` }[j.worst];
+}
+/* Where you are right now, per tab: "" = the usual start (home, school, MRT), or a first-boarding stop code.
+   Forgotten after 30 min so tomorrow's plan starts from home again. */
+let here = { tab: null, stop: "", at: 0 };
+const hereStop = tab => here.tab === tab.id && here.stop && Date.now() - here.at < 30 * 60000 ? here.stop : "";
+const startName = tab => { const n = tab.from.replace(/^From /, "").replace(/, now$/, ""); return n[0].toUpperCase() + n.slice(1); };
+function hereHtml(tab) {
+  const stops = [...new Set(tab.routes.flatMap(r => r.variants.map(v => v.find(l => l.t === "bus").from)))];
+  const cur = hereStop(tab);
+  const chip = (code, label) => `<button type="button" data-here="${code}" class="${cur === code ? "cur" : ""}" aria-pressed="${cur === code}">${esc(label)}</button>`;
+  return `<div class="here"><span>I'm at</span>${chip("", startName(tab))}${stops.map(c => chip(c, STOP[c])).join("")}</div>`;
 }
 const lastPlans = {};   // tab -> route index -> journeys, as last shown (for the Go buttons)
 const STAGE_CHIP = (st, legs) => st.k === "done" ? "Arrive" : st.k === "wait" ? "Wait" : st.k === "ride" ? legs[st.i].svc.join("/") : legs[st.i].t === "train" ? "MRT" : "Walk";
@@ -821,8 +842,8 @@ function renderTab(tab) {
   const errs = stops.filter(s => cache[s] && cache[s].err && !cache[s].json);
   const loaded = stops.some(s => cache[s] && cache[s].json);
   const T = tripState;
-  const allowEarly = leaveWord(tab) != null;
-  const plans = tab.routes.map((r, ri) => ({ r, ri, js: planRoute(r, allowEarly) }));
+  const at = hereStop(tab);
+  const plans = tab.routes.map((r, ri) => ({ r, ri, js: planRoute(r, true, at) }));
   lastPlans[tab.id] = {}; plans.forEach(p => { lastPlans[tab.id][p.ri] = p.js; });
   const head = js => js.find(j => !j.early);
   // Rank catchable routes first (no very tight transfer), then by arrival time.
@@ -833,7 +854,8 @@ function renderTab(tab) {
     if (trip.tab === tab.id) h += renderTrip(T);
     else h += `<button class="tripbar" type="button" data-tab="${trip.tab}">On the way: ${esc(trip.name)} · tap to view</button>`;
   }
-  h += `<div class="from">${trip && trip.tab === tab.id ? "Other routes right now · " : ""}${esc(tab.from)} · catchable routes first, then by arrival time</div>`;
+  h += hereHtml(tab);
+  h += `<div class="from">${trip && trip.tab === tab.id ? "Other routes right now · " : ""}${at ? "From " + esc(STOP[at]) + " (other routes: " + esc(tab.from.toLowerCase()) + ")" : esc(tab.from)} · catchable routes first, then by arrival time</div>`;
   if (errs.length) h += `<div class="err">Couldn't load ${errs.length} stop${errs.length > 1 ? "s" : ""} (${errs.join(", ")}). Check your connection, then tap Refresh.</div>`;
   if (!loaded && !errs.length) h += `<div class="empty">Loading live arrivals…</div>`;
   const go = (ri, k, label) => trip ? "" : `<button class="btn go" type="button" data-go="${tab.id}|${ri}|${k}">${label}</button>`;
@@ -848,13 +870,13 @@ function renderTab(tab) {
       h += `<div class="summary">${leaveHtml(j, tab)}${overallPill(j)}${j.estimated ? `<span class="pill">some times est.</span>` : ""}</div>`;
       h += `<ol class="steps">${j.steps.map(s => stepHtml(s)).join("")}</ol>`;
       if (!trip) h += `<div class="acts">${go(ri, hk, "Go")}</div>`;
-    } else h += `<div class="empty">${loaded ? "No bus you can reach in time right now." : "Waiting for arrivals…"}</div>`;
+    } else h += `<div class="empty">${loaded ? "No bus you can reach in time right now. Already at the stop? Tap it under \"I'm at\"." : "Waiting for arrivals…"}</div>`;
     const later = js.filter(o => o !== j);
     if (later.length) {
       h += `<details${!j ? " open" : ""}><summary>${later.length} more option${later.length > 1 ? "s" : ""}</summary><table class="later"><tbody>` +
         later.map(o => {
           const firstBus = o.steps.find(s => s.bus), k = js.indexOf(o);
-          const when = o.early ? `Already walking? ${esc(firstBus.bus.svc)} at ${clock(firstBus.bus.eta)}` : leaveWord(tab) != null ? "Leave " + clock(o.leave) : "First bus " + clock(firstBus.bus.eta);
+          const when = o.early ? `Already on your way? ${esc(firstBus.bus.svc)} at ${clock(firstBus.bus.eta)}` : o.atStop ? "Bus " + clock(firstBus.bus.eta) : leaveWord(tab) != null ? "Leave " + clock(o.leave) : "First bus " + clock(firstBus.bus.eta);
           return `<tr class="${o.early ? "early" : ""}"><td>${when}</td><td>${o.arrive != null ? "Arrive " + clock(o.arrive) : "—"}</td><td>${overallPill(o)}</td><td>${go(ri, k, "Go")}</td></tr>`;
         }).join("") + `</tbody></table></details>`;
     }
@@ -922,6 +944,8 @@ $("#view").addEventListener("click", e => {
   if (e.target.id === "reset") { overrides = {}; store.set("bus.overrides", overrides); renderTimes(); return; }
   const g = e.target.closest("[data-go]");
   if (g) { const [t, ri, k] = g.dataset.go.split("|"); startTrip(t, +ri, +k); return; }
+  const hb = e.target.closest("[data-here]");
+  if (hb) { here = { tab: current, stop: hb.dataset.here, at: Date.now() }; render(); return; }
   const tb = e.target.closest(".tripbar[data-tab]");
   if (tb) { current = tb.dataset.tab; store.set("bus.tab", current); render(); refresh(); return; }
   const a = e.target.closest("[data-act]");
