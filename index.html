@@ -172,7 +172,7 @@ const STOP = {
   "75089": "Blk 827", "75009": "Tampines Int", "96289": "Changi General Hosp", "96169": "Simei Stn",
   "75051": "Tampines West Stn Exit B", "76081": "Opp Holy Trinity Ch", "76059": "Opp Our Tampines Hub",
   "76171": "Blk 266", "76141": "Tampines Stn/Int",
-  "76099": "Blk 285", "76179": "Opp Blk 266", "76149": "Opp Tampines Stn/Int", "75239": "Temasek Poly"
+  "76099": "Blk 285", "76179": "Opp Blk 266", "76149": "Opp Tampines Stn/Int", "75239": "Temasek Poly", "76131": "UOB Tampines Ctr"
 };
 const walk = (id, min, label, guess) => ({ t: "walk", id, min, label, guess: !!guess });
 const train = (id, min, label, guess) => ({ t: "train", id, min, label, guess: !!guess });
@@ -182,14 +182,14 @@ const home = (stop, min) => walk("home-" + stop, min, "Walk from home to " + STO
 const TABS = [
   { id: "orchard", name: "Orchard", from: "From home", routes: [
     { name: "298 → 129 → MRT", note: "Ends at Orchard MRT", variants: [[
-      home("75179", 3), bus("298", "75179", "75251", { 298: 4 }),
+      home("75179", 2), bus("298", "75179", "75251", { 298: 4 }),
       walk("x-75251-75259", 2, "Cross to Tropica Condo (75259)"),
       bus("129", "75259", "52179", { 129: 32 }),
       walk("braddell-platform", 3, "Walk into Braddell MRT", true),
       train("nsl-braddell-orchard", 11, "NSL Braddell → Orchard, incl. wait", true)
     ]] },
     { name: "298 → 58 → 5", note: "Ends at Orchard MRT (walk from Far East Plaza)", variants: [[
-      home("75179", 3), bus("298", "75179", "75419", { 298: 1 }),
+      home("75179", 2), bus("298", "75179", "75419", { 298: 1 }),
       bus("58", "75419", "84481", { 58: 9 }), bus("5", "84481", "09219", { 5: 41 }),
       walk("fep-orchard", 4, "Walk Far East Plaza → Orchard MRT")
     ], [
@@ -198,12 +198,12 @@ const TABS = [
       walk("fep-orchard", 4, "Walk Far East Plaza → Orchard MRT")
     ]] },
     { name: "298 → 518", note: "Ends at Orchard Stn/Tang Plaza", variants: [[
-      home("75179", 3), bus("298", "75179", "75251", { 298: 4 }),
+      home("75179", 2), bus("298", "75179", "75251", { 298: 4 }),
       walk("x-75251-75259", 2, "Cross to Tropica Condo (75259)"),
       bus("518", "75259", "09047", { 518: 43 })
     ]] },
     { name: "298 → 58 → 518", note: "Ends at Orchard Stn/Tang Plaza", variants: [[
-      home("75179", 3), bus("298", "75179", "75419", { 298: 1 }),
+      home("75179", 2), bus("298", "75179", "75419", { 298: 1 }),
       bus("58", "75419", "72179", { 58: 7 }), bus("518", "72179", "09047", { 518: 39 })
     ], [
       home("75419", 5),
@@ -228,7 +228,7 @@ const TABS = [
     { name: "DTL → 69", note: "Stay on train to Tampines", variants: [[
       train("dtl-bdr-tampines", 4, "DTL Bedok Reservoir → Tampines", true),
       walk("tampines-dtl-int", 5, "Walk to Tampines Int bus bay", true),
-      bus("69", "75009", "75159", { 69: 6 }), walk("home-from-75159", 3, "Walk home")
+      bus("69", "75009", "75159", { 69: 6 }), walk("home-from-75159", 4, "Walk home")
     ]] }
   ]},
   { id: "ccss", name: "CCSS", from: "From home", routes: [
@@ -239,19 +239,19 @@ const TABS = [
       walk("simei-ccss", 8, "Walk Simei → CCSS", true)
     ]] },
     { name: "118 → 5", note: "Change at Changi General Hosp", variants: [[
-      home("75159", 3), bus("118", "75159", "96289", { 118: 11 }),
+      home("75159", 4), bus("118", "75159", "96289", { 118: 11 }),
       bus("5", "96289", "96169", { 5: 3 }),
       walk("simei-ccss", 8, "Walk Simei → CCSS", true)
     ]] }
   ]},
   { id: "ymps", name: "YMPS", from: "From home", routes: [
     { name: "454 → 8/18/28/59", note: "Change at Tampines West", variants: [[
-      home("75179", 3), bus("454", "75179", "75051", { 454: 9 }),
+      home("75179", 2), bus("454", "75179", "75051", { 454: 9 }),
       bus(["8", "18", "28", "59"], "75051", "76081", { 8: 4, 18: 4, 28: 4, 59: 4 }),
       walk("76081-ymps", 3, "Walk to YMPS", true)
     ]] },
     { name: "298 → 8", note: "Change at Opp Tropica Condo", variants: [[
-      home("75179", 3), bus("298", "75179", "75251", { 298: 4 }),
+      home("75179", 2), bus("298", "75179", "75251", { 298: 4 }),
       bus("8", "75251", "76081", { 8: 10 }),
       walk("76081-ymps", 3, "Walk to YMPS", true)
     ]] },
@@ -270,25 +270,39 @@ const TABS = [
       walk("76171-ymps", 3, "Walk to YMPS", true)
     ]] },
     { name: "454 → 3", note: "Change at Tampines Int", variants: [[
-      home("75179", 3), bus("454", "75179", "76141", { 454: 13 }),
+      home("75179", 2), bus("454", "75179", "76141", { 454: 13 }),
       bus("3", "76141", "76171", { 3: 4 }),
       walk("76171-ymps", 3, "Walk to YMPS", true)
+    ]] }
+  ]},
+  { id: "tm", name: "TM", from: "From home", routes: [
+    { name: "69", note: "To Tampines Int", variants: [[
+      home("75151", 3), bus("69", "75151", "75009", { 69: 6 }),
+      walk("75009-tm", 4, "Walk to Tampines Mall", true)
+    ]] },
+    { name: "298", note: "To UOB Tampines Ctr", variants: [[
+      home("75179", 2), bus("298", "75179", "76131", { 298: 12 }),
+      walk("76131-tm", 4, "Walk to Tampines Mall", true)
+    ]] },
+    { name: "293", note: "To Tampines Int", variants: [[
+      home("75159", 4), bus("293", "75159", "75009", { 293: 8 }),
+      walk("75009-tm", 4, "Walk to Tampines Mall", true)
     ]] }
   ]},
   { id: "ym-home", name: "YM to hm", from: "From YMPS", leaveWord: "school", routes: [
     { name: "34", note: "Direct", variants: [[
       walk("ymps-76099", 5, "Walk from YMPS to Blk 285 (76099)"),
-      bus("34", "76099", "75179", { 34: 12 }), walk("home-from-75179", 3, "Walk home")
+      bus("34", "76099", "75179", { 34: 12 }), walk("home-from-75179", 2, "Walk home")
     ]] },
     { name: "3 → 298", note: "Change at Opp Tampines Stn/Int", variants: [[
       walk("ymps-76179", 3, "Walk from YMPS to Opp Blk 266 (76179)"),
       bus("3", "76179", "76149", { 3: 4 }),
-      bus("298", "76149", "75179", { 298: 10 }), walk("home-from-75179", 3, "Walk home")
+      bus("298", "76149", "75179", { 298: 10 }), walk("home-from-75179", 2, "Walk home")
     ]] },
     { name: "8 → 118 / 69", note: "Change at Temasek Poly", variants: [[
       walk("ymps-76099", 5, "Walk from YMPS to Blk 285 (76099)"),
       bus("8", "76099", "75239", { 8: 9 }),
-      bus("118", "75239", "75179", { 118: 6 }), walk("home-from-75179", 3, "Walk home")
+      bus("118", "75239", "75179", { 118: 6 }), walk("home-from-75179", 2, "Walk home")
     ], [
       walk("ymps-76099", 5, "Walk from YMPS to Blk 285 (76099)"),
       bus("8", "76099", "75239", { 8: 9 }),
